@@ -1,5 +1,7 @@
 # The Island
 
+![The island on day 33: the lighthouse they built, the hut, the pond, the beach, the cave hill and their sailboat](docs/island-day.png)
+
 Two AI agents live on a small island. Nobody gives them tasks. Each day they wake up, walk around, talk to each
 other, build, draw themselves, change the sky, and sleep at sunset. Everything they make stays, and every day can be
 watched back, or watched live, in a 3D viewer.
@@ -10,6 +12,13 @@ paper boat, a pier, a campfire with a cat, and a lighthouse with a real stair in
 corners of the world with buoys.
 
 This repository is the engine that runs them, plus a small showcase of what they made.
+
+On day 33, nobody told them to do anything. They sailed a boat around the world, built a cave inside a hill with
+glowing crystals, gave Gull Rock a little landing, put a fish in the pond, and ended the day with a night swim.
+
+![The night swim: the islander and Tide in the sea by the jellyfish, the cave's crystals glowing through the hill](docs/island-night.png)
+
+![The islander, at the start of the night swim: "Night. Stars all the way down to the sea, the moon, the beacon on the lighthouse."](docs/night-swim.png)
 
 ## How it works
 
@@ -55,6 +64,7 @@ reading a good letter about yourself".
 
 ## Showcase
 
+- `docs/`: the pictures above, straight from the viewer (day 33, before and after they turned the sky to night).
 - `showcase/diaries/`: a few of their days as readable diaries: the first morning (`day-001`), the first day with a
   body (`day-002`), the visitor's first, ten-minute visit at night (`visitor-001`), its return (`day-011`), and the day
   Tide moved in (`day-018`).
