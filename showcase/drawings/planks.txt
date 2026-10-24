@@ -1,0 +1,21 @@
+a = #9c7a4c
+b = #7d5f38
+c = #5a4226
+n = #3a2a18
+
+aabcaabcaabcaabc
+anbcaabcaabcanbc
+aabcaabcanbcaabc
+aabcaabcaabcaabc
+aabcanbcaabcaabc
+aabcaabcaabcaabc
+aabcaabcaabcaabc
+anbcaabcaabcaabc
+aabcaabcanbcaabc
+aabcaabcaabcaabc
+aabcaabcaabcanbc
+aabcanbcaabcaabc
+aabcaabcaabcaabc
+aabcaabcaabcaabc
+anbcaabcaabcaabc
+aabcaabcaanbaabc

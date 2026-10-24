@@ -1,0 +1,16 @@
+shapes: 16x24
+speed: 600
+outline: #7a5a9a 0.5
+blob 2,11 3,6 8,3 13,6 14,11 8,12.5 fill #f6d2ee to #b48ad8
+ellipse 6 6.5 2 1.2 fill #fff4fb stroke none turn -20
+curve 4,11.5 3,15 5,19 4,23 stroke #c7a2e2 0.7
+curve 6.5,12 7.5,16 5.5,20 6.5,23.5 stroke #d9b8ee 0.6
+curve 9.5,12 8.5,16 10.5,20 9.5,23.5 stroke #d9b8ee 0.6
+curve 12,11.5 13,15 11,19 12,23 stroke #c7a2e2 0.7
+---
+blob 3,12 4,7 8,4.5 12,7 13,12 8,13.5 fill #f6d2ee to #b48ad8
+ellipse 6.3 7.5 1.8 1 fill #fff4fb stroke none turn -20
+curve 4.5,12.5 5,16 3.5,20 5,23.5 stroke #c7a2e2 0.7
+curve 7,13 6,17 7.5,20.5 6,23.5 stroke #d9b8ee 0.6
+curve 9,13 10,17 8.5,20.5 10,23.5 stroke #d9b8ee 0.6
+curve 11.5,12.5 11,16 12.5,20 11,23.5 stroke #c7a2e2 0.7

@@ -1,0 +1,6 @@
+shapes: 16x24
+ellipse 8 21 6 1.6 fill #ffffff55 stroke none
+rect 7.4 4 1.2 6 fill #3a3a3a stroke none
+circle 8 4 1.6 fill #fff6c0 stroke #8a7a30 0.4
+poly 3,20 13,20 11,10 5,10 fill #e8402a to #b02a1a stroke #5a1a10 0.6
+rect 4.2 14 7.6 2.4 fill #ffffff stroke none

@@ -1,0 +1,18 @@
+shapes: 32x40
+outline: #2a1e14 0.6
+speed: 500
+poly 15,4 15,28 4,28 fill #fdf6e3 to #e8dcc0
+poly 17,8 17,28 27,28 fill #fdf6e3 to #e8dcc0
+rect 15.2 2 1.6 30 fill #6b4a2b
+poly 16.8,2 23,4 16.8,6 fill #2aa198
+path M 2,30 L 30,30 Q 28,37 24,38 L 8,38 Q 4,37 2,30 Z fill #b5542d to #7a3418
+line 4,33 28,33 stroke #fdf6e3 0.8
+curve 0,39 6,37.5 12,39 18,37.5 24,39 32,37.5 stroke #ffffff 0.8
+---
+poly 15,4 15,28 4,28 fill #fdf6e3 to #e8dcc0
+poly 17,8 17,28 27,28 fill #fdf6e3 to #e8dcc0
+rect 15.2 2 1.6 30 fill #6b4a2b
+poly 16.8,2 23,5 16.8,6 fill #2aa198
+path M 2,30 L 30,30 Q 28,37 24,38 L 8,38 Q 4,37 2,30 Z fill #b5542d to #7a3418
+line 4,33 28,33 stroke #fdf6e3 0.8
+curve 0,37.5 6,39 12,37.5 18,39 24,37.5 32,39 stroke #ffffff 0.8

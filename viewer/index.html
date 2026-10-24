@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Island</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #fffdf8; --ink: #24211c; --muted: #6d665a; --line: #e2dccf;
+    --accent: #2f6fb3; --now: #fff1cc; --bad: #b4452f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171b; --panel: #1d2026; --ink: #e8e4dc; --muted: #9a958b; --line: #2e323a; --accent: #6aa5e8; --now: #33301f; --bad: #e07a63; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0 8px 0 0; letter-spacing: .02em; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  #clock { font-variant-numeric: tabular-nums; font-weight: 600; margin-left: auto; }
+  #live { color: #fff; background: #c0392b; border-radius: 4px; padding: 2px 8px; font-size: 13px; font-weight: 700; letter-spacing: .05em; animation: pulse 2s ease-in-out infinite; }
+  .live-btn { border-color: #c0392b; color: #c0392b; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { #live { animation: none; } }
+  #meta { color: var(--muted); font-size: 13px; width: 100%; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px; height: calc(100vh - 92px); min-height: 520px; }
+  #stagewrap { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  #stage { flex: 1; min-height: 0; position: relative; background: #2f6fb3; border-radius: 8px; overflow: hidden; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  #stage canvas.dragging { cursor: grabbing; }
+  #zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  #zoom button { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; opacity: .92; }
+  #scrub { width: 100%; accent-color: var(--accent); }
+  #talk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #talk[hidden] { display: none; }
+  #say { flex: 1; min-width: 180px; font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+  #talknote { color: var(--muted); font-size: 13px; width: 100%; }
+  .step.voice .txt { color: var(--accent); }
+  .step.guest .txt { color: #3f8a55; }
+  #logwrap { position: relative; display: flex; flex-direction: column; min-height: 0; }
+  #log { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 0; }
+  #lognow { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); border-color: var(--accent); color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+  .step { display: grid; grid-template-columns: 46px 22px 1fr; gap: 4px; padding: 6px 12px; cursor: pointer; border-left: 3px solid transparent; }
+  .step:hover { background: color-mix(in srgb, var(--now) 50%, transparent); }
+  .step.now { background: var(--now); border-left-color: var(--accent); }
+  .step .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .step .txt { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .step.think .txt { color: var(--muted); font-style: italic; }
+  .step.fail .txt { color: var(--bad); }
+  .step pre { margin: 6px 0 0; padding: 8px; max-height: 260px; overflow: auto; background: var(--bg); border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
+  .step canvas.drawing.vector { image-rendering: auto; }
+  .step canvas.drawing { display: block; margin-top: 6px; image-rendering: pixelated; border: 1px solid var(--line); background: repeating-conic-gradient(#ccc 0 25%, #eee 0 50%) 0 0 / 8px 8px; }
+  .prompt { margin: 4px 12px 8px; padding: 8px 10px; border-left: 3px solid var(--line); color: var(--muted); white-space: pre-wrap; }
+  #empty { padding: 40px 16px; color: var(--muted); }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    #stage { height: 62vw; min-height: 260px; flex: none; }
+    #log { flex: none; max-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>The Island</h1>
+  <select id="daypick" aria-label="Day"></select>
+  <button id="play">Play</button>
+  <select id="speed" aria-label="Speed">
+    <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="10">10×</option>
+  </select>
+  <button id="follow" title="Switch between following the islander up close and seeing the whole island">Show whole island</button>
+  <button id="view3d" title="Switch between the island in 3D and flat from above">3D view</button>
+  <button id="voice" title="Hear the islander's words spoken aloud">🔈 Voice off</button>
+  <button id="golive" class="live-btn" hidden></button>
+  <span id="live" hidden>● LIVE</span>
+  <span id="clock"></span>
+  <div id="meta"></div>
+</header>
+<main id="main">
+  <div id="stagewrap">
+    <div id="stage">
+      <canvas id="cv" title="Drag to move around. Scroll or pinch to zoom. Double-click to go back."></canvas>
+      <div id="zoom">
+        <button id="zoomin" title="Zoom in (+)" aria-label="Zoom in">+</button>
+        <button id="zoomout" title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <button id="camreset" title="Back to the usual view (0)" aria-label="Back to the usual view" hidden>⟲</button>
+      </div>
+    </div>
+    <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Timeline">
+    <form id="talk" hidden autocomplete="off">
+      <input id="say" maxlength="1000" placeholder="Say something to them…" aria-label="Say something to the islander and Tide">
+      <button type="submit">Say</button>
+      <button type="button" id="endday" title="End today for both of them now, before sunset">End day</button>
+      <span id="talknote"></span>
+    </form>
+  </div>
+  <div id="logwrap">
+    <div id="log"></div>
+    <button id="lognow" hidden>↓ Back to now</button>
+  </div>
+</main>
+<div id="empty" hidden>No days recorded yet. When the islander's next day starts, it appears here by itself.</div>
+
+<script src="art.js"></script>
+<script>
+const A = IslandArt, T = A.TILE;
+const $ = id => document.getElementById(id);
+let days = [], R = null, timeline = [], total = 0, now = 0, playing = false, speed = 1, follow = true, lastFrame = 0;
+let world = null, bgCanvas = null, bgDirty = true, appliedUpTo = -1, bodyFrames = null;
+
+let loadingDay = null, liveTimer = null;
+const scripts = {};
+
+// Data arrives as scripts (so the page also works opened straight from disk). A day that is still
+// running is marked "live"; the page then reloads it every few seconds and plays the new steps.
+window.ISLAND_DAYS = list => {
+  const first = !days.length;
+  days = list;
+  if (!days.length) return showEmpty();
+  $('main').hidden = false; $('empty').hidden = true;
+  const pick = $('daypick'), keep = pick.value;
+  pick.innerHTML = '';
+  for (const d of days) {
+    const o = document.createElement('option');
+    o.value = d.day; o.textContent = `Day ${d.day} · ${d.date}` + (d.endedBy === 'live' ? ' · LIVE' : ''); pick.appendChild(o);
+  }
+  if (first) {
+    const want = Number(new URLSearchParams(location.search).get('day')) || days[days.length - 1].day;
+    pick.value = want; loadDay(want);
+  } else pick.value = keep;
+  const live = days.find(d => d.endedBy === 'live');
+  $('golive').hidden = !live || (R && R.day === live.day);
+  if (live) $('golive').textContent = `● Day ${live.day} is live: watch`;
+};
+window.ISLAND_REPLAY = data => {
+  if (data.day === loadingDay) { loadingDay = null; R = data; setupDay(); }
+  else if (R && data.day === R.day) refreshDay(data);
+};
+
+function loadScript(key, src, onerror) {
+  if (scripts[key]) scripts[key].remove();
+  const s = document.createElement('script'); s.src = src; s.onerror = onerror; document.body.appendChild(s);
+  scripts[key] = s;
+}
+const dayFile = day => `../logs/replay/day-${String(day).padStart(3, '0')}.js?` + Date.now();
+
+loadScript('index', '../logs/replay/index.js?' + Date.now(), () => showEmpty());
+setInterval(() => loadScript('index', '../logs/replay/index.js?' + Date.now()), 5000);
+
+function showEmpty() { $('main').hidden = true; $('empty').hidden = false; }
+function loadDay(day) { setPlaying(false); R = null; loadingDay = day; $('daypick').value = day; loadScript('day', dayFile(day)); }
+$('daypick').onchange = e => loadDay(Number(e.target.value));
+$('golive').onclick = () => { const live = days.find(d => d.endedBy === 'live'); if (live) loadDay(live.day); };
+
+function watchLive() {
+  clearInterval(liveTimer); liveTimer = null;
+  const live = R && R.endedBy === 'live';
+  $('talk').hidden = !live;
+  if (!live) return;
+  loadScript('livecfg', '../logs/replay/live.js?' + Date.now());
+  liveTimer = setInterval(() => {
+    loadScript('day', dayFile(R.day));
+    if (!liveCfg || liveCfg.day !== R.day) loadScript('livecfg', '../logs/replay/live.js?' + Date.now());
+  }, 3000);
+}
+
+// Talking to the islander while its day is live. The body's server (world.mjs) takes the message;
+// the islander hears it at its next action.
+let liveCfg = null;
+window.ISLAND_LIVE = cfg => { liveCfg = cfg; };
+$('talk').onsubmit = async e => {
+  e.preventDefault();
+  const text = $('say').value.trim(), note = $('talknote');
+  if (!text) return;
+  if (!liveCfg || !R || liveCfg.day !== R.day) { note.textContent = "Can't reach the island right now. Is the day still going?"; return; }
+  note.textContent = 'Sending…';
+  try {
+    const r = await fetch(`http://127.0.0.1:${liveCfg.port}/say`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ token: liveCfg.token, text }) });
+    if (!r.ok) throw new Error(r.status);
+    $('say').value = '';
+    note.textContent = 'Sent. They will hear you at their next action.';
+  } catch {
+    note.textContent = "It didn't arrive. The day may have just ended.";
+  }
+};
+
+// Ending the day early (the owner's button): both of them stop within a second or two, and the day is saved as usual.
+$('endday').onclick = async () => {
+  const note = $('talknote');
+  if (!liveCfg || !R || liveCfg.day !== R.day) { note.textContent = "Can't reach the island right now. Is the day still going?"; return; }
+  if (!confirm('End today now, before sunset? Both of them stop, and the day is saved as usual.')) return;
+  note.textContent = 'Ending the day…';
+  try {
+    const r = await fetch(`http://127.0.0.1:${liveCfg.port}/end`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ token: liveCfg.token }) });
+    if (!r.ok) throw new Error(r.status);
+    note.textContent = 'The day is ending. The replay finishes in a moment.';
+  } catch {
+    note.textContent = "It didn't arrive. The day may have just ended.";
+  }
+};
+
+// New steps of a live day: keep the place in the timeline, and keep following if we were at the end.
+function refreshDay(data) {
+  const changed = data.steps.length !== R.steps.length || data.endedBy !== R.endedBy;
+  const atEnd = now >= total - 1;
+  R = data;
+  showMeta();
+  if (!changed) return;
+  // The log is written again from the start; it keeps its place, so whoever is reading it isn't moved.
+  const top = $('log').scrollTop;
+  buildTimeline(); resetWorld(); lastHi = -1; buildLog();
+  setLogTop(top);
+  if (atEnd) setPlaying(true);
+  if (R.endedBy !== 'live') watchLive();
+  render();
+}
+
+// --- Timeline: how long each step plays, in ms at 1× ---------------------------
+// A stretch of a film they watched (the watch tool): 'watching "Film" 12:30-13:00'.
+function filmTime(sec) { sec = Math.max(0, Math.floor(sec || 0)); const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, r = String(sec % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`; }
+function watching(s) { return s.film ? `watching "${s.film}" ${filmTime(s.from)}–${filmTime(s.to)}` : 'looking at the films in the cinema'; }
+
+function durationOf(s) {
+  if (s.kind === 'say' || s.kind === 'think' || s.kind === 'voice') return Math.min(8000, 1400 + s.text.length * 30);
+  if (s.kind === 'notebook') return 1500;
+  if (s.tool === 'say' && s.ok) return Math.min(8000, 1400 + (s.said || '').length * 30);
+  if (s.tool === 'listen') return 1500;
+  if (s.tool === 'watch' && s.ok) return 2500;
+  if (s.kind === 'world' && s.tool === 'sleep') return 2500;
+  if (s.kind === 'guest') return s.tool === 'walk' && s.ok ? Math.max(400, (s.path || []).length * 170) : 1100;
+  if (s.kind === 'world') {
+    if (!s.ok) return 1200;
+    if (s.tool === 'walk') return Math.max(400, (s.path || []).length * 170);
+    if (s.tool === 'look') return 1100;
+    return 900;
+  }
+  return 1000;
+}
+
+function buildTimeline() {
+  timeline = []; total = 0;
+  for (const s of R.steps) { const d = durationOf(s); timeline.push({ s, from: total, to: total + d }); total += d; }
+  if (R.endedBy === 'live') {
+    if (!timeline.length) { timeline.push({ s: { kind: 'waking', t: R.start }, from: 0, to: 1500 }); total = 1500; }
+  } else { timeline.push({ s: { kind: 'sleep', t: R.end }, from: total, to: total + 2500 }); total += 2500; }
+}
+
+function showMeta() {
+  const live = R.endedBy === 'live';
+  $('live').hidden = !live;
+  $('golive').hidden = true;
+  const mins = Math.round((new Date(R.end) - new Date(R.start)) / 60000);
+  $('meta').textContent = live
+    ? `Awake since ${hm(R.start)}. This updates by itself as it happens.`
+    : `${hm(R.start)} to ${hm(R.end)} (${mins} min). ` + (R.endedBy === 'rest' ? 'It ended the day itself.' : 'The sun set.') + (R.embodied ? '' : ' It had no body yet on this day.');
+}
+
+function setupDay() {
+  buildTimeline();
+  // A live day opens near its latest steps; a finished day plays from the start.
+  now = R.endedBy === 'live' ? timeline[Math.max(0, timeline.length - 3)].from : 0;
+  resetWorld(); lastHi = -1; setLogFollow(true);
+  showMeta(); buildLog(); setLogTop(0); render(); setPlaying(true); watchLive();
+}
+
+function hm(iso) { const d = new Date(iso); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+
+// --- World state at a point in the timeline ------------------------------------
+function resetWorld() {
+  const st = R.startState;
+  world = { map: R.map, paint: { ...(st ? st.paint : {}) }, height: { ...(st && st.height ? st.height : {}) }, smooth: { ...(st && st.smooth ? st.smooth : {}) }, things: st ? st.things.map(t => ({ ...t })) : [], body: st ? { ...st.body } : null, looks: st ? st.looks : null, guests: {},
+    blocks: { ...(st && st.blocks ? st.blocks : {}) }, rules: st ? st.rules || null : null, sky: st && st.sky ? { ...st.sky } : {} };
+  saidList = R.steps.filter(s => s.tool === 'say' && s.ok && s.said).map(s => ({ who: s.kind === 'guest' ? s.who : 'islander', text: s.said, t: Date.parse(s.t) }));
+  ruledCache = null;
+  bodyFrames = world.looks ? bodySprites(world.looks) : null;
+  appliedUpTo = -1; bgDirty = true;
+}
+
+// Tide's body (her own drawing of herself once she makes one).
+const guestFrames = {};
+const guestSprite = (who, ms) => {
+  const f = guestFrames[who] || (guestFrames[who] = spriteFrames(A.parseDrawing(A.VISITOR_BODY)));
+  return f[Math.floor((ms || 0) / (f.frameMs || 300)) % f.length];
+};
+
+// What a step changes in the world: the islander's own (kind "world") or Tide's (kind "guest").
+// A build is replayed with the same function the island used; whoever stood on cleared blocks fell with it.
+function changeWorld(s) {
+  if (s.tool === 'build' && s.op) {
+    A.applyBuild(world, s.op);
+    for (const f of s.fell || []) {
+      const b = f.who === 'islander' ? world.body : world.guests[f.who];
+      if (b) { if (f.z == null) delete b.z; else b.z = f.z; }
+    }
+    for (const f of s.thingsFell || []) world.things = world.things.map(t => { if (t.id !== f.id) return t; const u = { ...t }; if (f.z == null) delete u.z; else u.z = f.z; return u; });
+    bgDirty = true;
+  }
+  if (s.tool === 'sky' && s.ok && s.sky) { world.sky = { ...s.sky }; ruledCache = null; }
+  if (s.tool === 'rules' && 'rules' in s) { world.rules = s.rules; ruledCache = null; bgDirty = true; }
+  if (s.tool === 'paint' && 'color' in s) { for (const [x, y] of s.tiles) { if (s.color) world.paint[x + ',' + y] = s.color; else delete world.paint[x + ',' + y]; } bgDirty = true; }
+  if (s.tool === 'shape' && 'level' in s) { for (const [x, y] of s.tiles) { if (s.level > 1) world.height[x + ',' + y] = s.level; else delete world.height[x + ',' + y]; } bgDirty = true; }
+  // Smooth or square edges (their choice, with paint or shape).
+  if ((s.tool === 'paint' || s.tool === 'shape') && s.edges && s.tiles) { for (const [x, y] of s.tiles) { if (s.edges === 'smooth') world.smooth[x + ',' + y] = 1; else delete world.smooth[x + ',' + y]; } bgDirty = true; }
+  if (s.tool === 'place') { world.things.push(s.thing); bgDirty = true; }
+  if (s.tool === 'remove') { world.things = world.things.filter(t => t.id !== s.id); bgDirty = true; }
+}
+
+function apply(s) {
+  if (s.kind === 'guest') {
+    if (s.tool === 'arrive') { world.guests[s.who] = { ...s.body }; if (s.drawing) guestFrames[s.who] = bodySprites(s.drawing); }
+    else if (s.tool === 'leave') delete world.guests[s.who];
+    else if (s.tool === 'looks' && s.drawing) guestFrames[s.who] = bodySprites(s.drawing);
+    else if (s.ok && s.body && world.guests[s.who]) world.guests[s.who] = { ...s.body };
+    if (s.ok) changeWorld(s);
+    return;
+  }
+  if (s.kind !== 'world' || !s.ok) return;
+  if (s.tool === 'walk' && s.body) world.body = { ...s.body };
+  changeWorld(s);
+  if (s.tool === 'looks') { world.looks = s.drawing; bodyFrames = bodySprites(s.drawing); }
+  if (s.body && world.body) world.body.facing = s.body.facing;
+}
+
+function stateAt(i) {
+  if (i < appliedUpTo) resetWorld();
+  while (appliedUpTo < i - 1) { appliedUpTo++; apply(timeline[appliedUpTo].s); }
+}
+
+function spriteCanvas(d, frame) {
+  const c = document.createElement('canvas'); c.width = d.w; c.height = d.h;
+  const img = { width: d.w, height: d.h, data: new Uint8ClampedArray(d.w * d.h * 4) };
+  A.drawDrawing(img, d, 0, 0, frame || 0);
+  c.getContext('2d').putImageData(new ImageData(img.data, d.w, d.h), 0, 0);
+  // A drawing made of shapes also has a fine picture, four times the size, drawn smoothly in both views.
+  if (d.vector) {
+    const sm = A.rasterShapes(d, frame || 0, 4), sc = document.createElement('canvas');
+    sc.width = sm.w; sc.height = sm.h;
+    sc.getContext('2d').putImageData(new ImageData(sm.data, sm.w, sm.h), 0, 0);
+    c.smooth = sc; c.vector = true; sc.vector = true;
+  }
+  // A smooth drawing ("style: smooth") also has its smoothed picture, twice the size, for the 3D view.
+  else if (d.smooth && !d.model) {
+    const sm = A.smoothFrame(d, frame || 0), sc = document.createElement('canvas');
+    sc.width = sm.w; sc.height = sm.h;
+    sc.getContext('2d').putImageData(new ImageData(sm.data, sm.w, sm.h), 0, 0);
+    c.smooth = sc;
+  }
+  return c;
+}
+
+// One canvas per frame of an animated drawing (a 3D model is one picture, seen from above).
+function spriteFrames(d) {
+  const n = d.frames && !d.model ? d.frames.length : 1;
+  const out = Array.from({ length: n }, (_, i) => spriteCanvas(d, i));
+  out.frameMs = d.frameMs || 300;
+  return out;
+}
+// A body's frames. A body made as a 3D model shows its front when flat, and carries its 3D picture (iso) for the 3D view.
+function bodySprites(d) {
+  if (!d.model) return spriteFrames(d);
+  const front = spriteCanvas(A.frontView(d)), m = A.isoModelImage(d), c = document.createElement('canvas');
+  c.width = m.img.width; c.height = m.img.height;
+  c.getContext('2d').putImageData(new ImageData(m.img.data, m.img.width, m.img.height), 0, 0);
+  front.iso = { c, ax: m.ax, ay: m.ay, top: m.top };
+  const out = [front];
+  out.frameMs = 300;
+  return out;
+}
+// Frames per drawing (a rule can swap a thing's drawing for another).
+const thingFrames = new WeakMap();
+const framesOf = t => { if (!thingFrames.has(t.drawing)) thingFrames.set(t.drawing, spriteFrames(t.drawing)); return thingFrames.get(t.drawing); };
+
+// The still part of the picture, drawn once per change: the ground and everything that doesn't move.
+// In 3D, models stay in the background (only upright drawings move).
+// In 3D the picture is drawn twice as fine (bgRes), so it can be shown large without pixel steps.
+let view3d = true, bgIs3d = null, isoView = null, bgRes = 1, seaTiles = [], shoreEdges = [], seaMaskCanvas = null, fxCanvas = null;
+const movesNow = t => A.isAnimated(t) && !(view3d && t.drawing.model);
+// The world as the rules make it right now (rules.txt), worked out again when the step or where someone stands changes.
+let saidList = [], ruledCache = null, bgKey = '', bgWarm = 0;
+function ruledNow(i, bodies) {
+  const key = i + '|' + bodies.map(b => `${b.who}:${Math.round(b.x)},${Math.round(b.y)},${b.z == null ? '' : Math.round(b.z)}`).join(';');
+  if (ruledCache && ruledCache.key === key) return ruledCache.r;
+  const t = Date.parse(timeline[i].s.t || R.start), sun = sunsetTime(), start = Date.parse(R.start);
+  const f = sun ? Math.max(0, Math.min(1, (t - start) / Math.max(1, sun - start))) : null;
+  const r = A.withRules(world, world.rules, { t, f, night: Boolean(world.sky && world.sky.night), bodies, said: saidList });
+  ruledCache = { key, r };
+  return r;
+}
+// warm: how far the sky has turned toward sunset (in fifths, so it is redrawn only a few times a day).
+function background(scene, warm) {
+  if (scene.key !== bgKey) { bgKey = scene.key; bgDirty = true; }
+  if (view3d && warm !== bgWarm) { bgWarm = warm; bgDirty = true; }
+  if (!bgDirty && bgCanvas && bgIs3d === view3d) return bgCanvas;
+  const w = scene.world;
+  const img = view3d
+    ? A.renderIso(w, 0, 0, w.map.w, w.map.h, { skip: movesNow, margin: 160, warm: bgWarm, res: 2 })
+    : A.render(w, 0, 0, w.map.w, w.map.h, { skip: movesNow });
+  isoView = view3d ? img.view : null; bgRes = view3d ? 2 : 1;
+  // Where the water shows, so the waves and the foam aren't drawn over the land in front of them.
+  seaMaskCanvas = null;
+  if (view3d && img.seaMask) {
+    seaMaskCanvas = document.createElement('canvas'); seaMaskCanvas.width = img.width; seaMaskCanvas.height = img.height;
+    const md = new ImageData(img.width, img.height);
+    for (let p = 0; p < img.seaMask.length; p++) if (img.seaMask[p]) md.data[p * 4 + 3] = 255;
+    seaMaskCanvas.getContext('2d').putImageData(md, 0, 0);
+  }
+  bgCanvas = bgCanvas || document.createElement('canvas');
+  bgCanvas.width = img.width; bgCanvas.height = img.height;
+  bgCanvas.getContext('2d').putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
+  bgDirty = false; bgIs3d = view3d;
+  // Where the water is, and where it meets the land (for the moving sea).
+  seaTiles = []; shoreEdges = [];
+  for (let y = 0; y < world.map.h; y++) for (let x = 0; x < world.map.w; x++) {
+    if (A.isLand(world.map, x, y)) continue;
+    seaTiles.push([x, y, Boolean(world.paint[x + ',' + y])]);
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) if (A.isLand(world.map, x + dx, y + dy)) {
+      // In 3D the foam follows the rounded coast; flat, the edge of the step.
+      const pts = view3d ? A.coastLine(world.map, x, y, dx, dy) : dy ? [[x, dy < 0 ? y : y + 1], [x + 1, dy < 0 ? y : y + 1]] : [[dx < 0 ? x : x + 1, y], [dx < 0 ? x : x + 1, y + 1]];
+      if (pts.length > 1) shoreEdges.push([x, y, dx, dy, pts]);
+    }
+  }
+  return bgCanvas;
+}
+
+// --- The moving sea (the owner's gift), moving things, and the light ----------------
+// These are drawn fresh every frame on top of the still background, in real time, even while paused.
+function drawSea(g, scr, scale, ms) {
+  const t = ms / 1000, cv = $('cv'), W = cv.clientWidth, H = cv.clientHeight;
+  g.save();
+  for (const [x, y, painted] of seaTiles) {
+    const ph = A.hash(x, y, 9);
+    for (let k = 0; k < 2; k++) {
+      // A short light crest drifting slowly across the water.
+      const f = (t * 0.12 + ph + k * 0.5) % 1;
+      const u = (f + 0.15 * Math.sin(t * 0.7 + ph * 6) + 1) % 1, v = k * 0.5 + 0.25 + 0.08 * Math.sin(t + ph * 9);
+      const [sx, sy] = scr(x + u, y + v, 0);
+      if (sx < -20 || sy < -20 || sx > W + 20 || sy > H + 20) continue;
+      g.fillStyle = `rgba(205,228,255,${(painted ? 0.45 : 0.9) * 0.4 * Math.sin(f * Math.PI)})`;
+      const len = (view3d ? 6 : 4) * scale;
+      g.fillRect(sx - len / 2, sy, len, Math.max(1, scale * 0.8));
+    }
+  }
+  // Foam where the water meets the land, breaking and fading.
+  g.lineWidth = Math.max(1, scale * 1.2);
+  for (const [x, y, dx, dy, line] of shoreEdges) {
+    const e = 0.1 + 0.06 * Math.sin(t * 1.1 + x + y);
+    const a = 0.3 + 0.3 * Math.sin(t * 1.6 + x * 0.9 + y * 1.3);
+    const pts = line.map(([X, Y]) => scr(X - dx * e, Y - dy * e, 0));
+    if (pts[0][0] < -20 || pts[0][1] < -20 || pts[0][0] > W + 20 || pts[0][1] > H + 20) continue;
+    g.strokeStyle = `rgba(255,255,255,${a})`;
+    g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) g.lineTo(p[0], p[1]); g.stroke();
+  }
+  g.restore();
+}
+
+// Animated drawings and things that move by themselves (wander, circle, bob, sway).
+function drawMoving(g, scr, scale, ms, scene) {
+  for (const t of scene.things) {
+    if (!movesNow(t)) continue;
+    const m = A.motion(t, ms, scene), fr = framesOf(t), spr = fr[A.frameOf(t.drawing, ms) % fr.length];
+    if (view3d) {
+      const [fx, fy] = scr(t.x + 0.5 + m.dx / T, t.y + 0.5 + m.dy / T, A.movingLevel(scene, t, m) * A.LEVEL);
+      const w = spr.width * A.SPRITE * scale, h = spr.height * A.SPRITE * scale;
+      footShadow(g, fx, fy, w / 2, scale);
+      drawInked(g, spr.smooth || spr, fx - w / 2, fy - h, w, h, scale);
+    } else {
+      const [sx, sy] = scr((t.px + m.dx) / T, (t.py + m.dy) / T);
+      footShadow(g, sx + spr.width * scale / 2, sy + (spr.height - 1) * scale, spr.width * scale / 2, scale * 0.6);
+      drawInked(g, spr.vector ? spr.smooth : spr, sx, sy, spr.width * scale, spr.height * scale, scale);
+    }
+  }
+}
+
+// The light: warmer as sunset nears, dusk once the sun has set.
+function sunsetTime() {
+  if (R._sunset !== undefined) return R._sunset;
+  // Since the new memory the morning starts with their page and yesterday; today's sunset is after "--- now ---".
+  const m = /sun sets at (\d{1,2}):(\d{2})/i.exec((R.prompt || '').split('--- now ---').pop());
+  let s = null;
+  if (m) { const d = new Date(R.start); d.setHours(+m[1], +m[2], 0, 0); if (d < new Date(R.start)) d.setDate(d.getDate() + 1); s = d.getTime(); }
+  return (R._sunset = s);
+}
+// How warm the light is at island time `when` (0 to 1): over the last 40% of the day.
+function warmthAt(when) {
+  const sun = sunsetTime();
+  if (!sun) return 0;
+  const start = new Date(R.start).getTime(), f = (new Date(when).getTime() - start) / Math.max(1, sun - start);
+  return f > 0.6 ? Math.min(1, (f - 0.6) / 0.4) : 0;
+}
+function drawLight(g, W, H, when, dusk) {
+  const sky = world.sky || {}, a = sky.night ? 0 : warmthAt(when);
+  if (a > 0) { g.fillStyle = `rgba(255,140,60,${0.16 * a})`; g.fillRect(0, 0, W, H); }
+  if (sky.night) drawNight(g, W, H, sky.moon);
+  else if (sky.sun) drawSun(g, W, a);
+  if (dusk) { g.fillStyle = 'rgba(15,20,60,0.35)'; g.fillRect(0, 0, W, H); }
+}
+
+// The ink outline the island draws around everything (art.js), for what the viewer draws on top by itself:
+// the drawing's shape in ink, one picture pixel out on each side, then the drawing.
+function inkOf(c) {
+  if (c._ink) return c._ink;
+  const k = document.createElement('canvas'); k.width = c.width; k.height = c.height;
+  const kg = k.getContext('2d'); kg.drawImage(c, 0, 0); kg.globalCompositeOperation = 'source-in'; kg.fillStyle = `rgb(${A.INK})`; kg.fillRect(0, 0, k.width, k.height);
+  return (c._ink = k);
+}
+function drawInked(g, c, x, y, w, h, px) {
+  const k = inkOf(c);
+  g.save(); g.globalAlpha = 0.8;
+  if (c.vector) { g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; }
+  for (const [dx, dy] of [[-px, 0], [px, 0], [0, -px], [0, px]]) g.drawImage(k, x + dx, y + dy, w, h);
+  g.restore();
+  if (c.vector) { g.save(); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; g.drawImage(c, x, y, w, h); g.restore(); }
+  else g.drawImage(c, x, y, w, h);
+}
+// A soft shadow on the ground at someone's feet (rx: how wide, in screen pixels).
+function footShadow(g, x, y, rx, scale) {
+  const ry = Math.max(scale, rx * 0.45), grad = g.createRadialGradient(x, y, 0, x, y, rx);
+  grad.addColorStop(0, 'rgba(52,60,132,0.35)'); grad.addColorStop(1, 'rgba(52,60,132,0)');
+  g.save(); g.translate(x, y); g.scale(1, ry / rx); g.translate(-x, -y);
+  g.fillStyle = grad; g.beginPath(); g.arc(x, y, rx, 0, Math.PI * 2); g.fill(); g.restore();
+}
+
+// The sky they chose (the sky tool): night with stars and maybe a moon, or a sun by day, top right as in their looks.
+function drawNight(g, W, H, moon) {
+  g.fillStyle = 'rgba(8,14,40,0.59)'; g.fillRect(0, 0, W, H);
+  const tw = performance.now() / 700;
+  for (let k = 0; k < 70; k++) {
+    const x = A.hash(k, 1, 21) * W, y = A.hash(k, 2, 21) * H * 0.45;
+    g.fillStyle = `rgba(255,255,240,${0.35 + 0.5 * A.hash(k, Math.floor(tw + k), 22)})`;
+    g.fillRect(x, y, 1.5, 1.5);
+  }
+  if (!moon) return;
+  const cx = W - 48, cy = 44, r = 15, glow = g.createRadialGradient(cx, cy, r, cx, cy, r * 3.2);
+  glow.addColorStop(0, 'rgba(200,210,255,0.28)'); glow.addColorStop(1, 'rgba(200,210,255,0)');
+  g.fillStyle = glow; g.fillRect(cx - r * 4, cy - r * 4, r * 8, r * 8);
+  g.fillStyle = '#e8ecf5'; g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#bec4d2';
+  for (const [dx, dy, cr] of [[-5, -3, 4], [4, 5, 2.6], [3, -5, 2.4]]) { g.beginPath(); g.arc(cx + dx, cy + dy, cr, 0, Math.PI * 2); g.fill(); }
+}
+function drawSun(g, W, warm) {
+  const cx = W - 48, cy = 44 + warm * 30, r = 16, gr = Math.round(222 - 70 * warm), b = Math.round(90 - 50 * warm);
+  const glow = g.createRadialGradient(cx, cy, r, cx, cy, r * 4);
+  glow.addColorStop(0, `rgba(255,${gr},120,0.35)`); glow.addColorStop(1, 'rgba(255,230,120,0)');
+  g.fillStyle = glow; g.fillRect(cx - r * 4, cy - r * 4, r * 8, r * 8);
+  g.fillStyle = `rgb(255,${gr},${b})`; g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+}
+
+// Glows from the rules: a soft round light, stronger as the light warms (art.drawGlows does the same for their eyes).
+function drawGlows(g, scr, scale, glows, warm) {
+  for (const gl of glows) {
+    const c = A.parseColor(gl.color) || [255, 210, 122], [cx, cy] = scr(gl.x + 0.5, gl.y + 0.5, gl.z * A.LEVEL + 10), r = 26 * scale;
+    const a = 0.28 + 0.42 * Math.min(1, warm || 0), grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+    for (const k of [0, 0.25, 0.5, 0.75, 1]) grad.addColorStop(k, `rgba(${c[0]},${c[1]},${c[2]},${a * (1 - k) * (1 - k)})`);
+    g.fillStyle = grad; g.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+    // A bright core (bloom).
+    const rc = r * 0.3, core = g.createRadialGradient(cx, cy, 0, cx, cy, rc);
+    core.addColorStop(0, `rgba(${[0, 1, 2].map(j => Math.round(c[j] * 0.4 + 153))},${a})`); core.addColorStop(1, `rgba(${[0, 1, 2].map(j => Math.round(c[j] * 0.4 + 153))},0)`);
+    g.fillStyle = core; g.fillRect(cx - rc, cy - rc, 2 * rc, 2 * rc);
+  }
+}
+
+// --- Drawing a frame -----------------------------------------------------------
+function currentIndex() {
+  let lo = 0, hi = timeline.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (timeline[m].from <= now) lo = m; else hi = m - 1; }
+  return lo;
+}
+
+function render() {
+  if (!R) return;
+  const i = currentIndex(), cur = timeline[i], p = Math.max(0, Math.min(1, (now - cur.from) / (cur.to - cur.from)));
+  stateAt(i);
+  const cv = $('cv'), dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.imageSmoothingEnabled = false;
+
+  // Where someone is p of the way along a walk from `from`: path points are [x, y, level] (older days: [x, y]).
+  const along = (from, path) => {
+    const pts = [[from.x, from.y, A.levelOf(world, from)], ...path.map(q => [q[0], q[1], q[2] != null ? q[2] : A.heightAt(world, q[0], q[1])])];
+    const f = p * (pts.length - 1), k = Math.min(pts.length - 2, Math.floor(f)), r = f - k, lerp = j => pts[k][j] + (pts[k + 1][j] - pts[k][j]) * r;
+    return { x: lerp(0), y: lerp(1), z: lerp(2) };
+  };
+  // Where the body is right now (mid-walk it moves tile by tile), and at what level.
+  let bx = null, by = null, bz = null;
+  if (world.body) {
+    bx = world.body.x; by = world.body.y; bz = A.levelOf(world, world.body);
+    const s = cur.s;
+    if (s.kind === 'world' && s.tool === 'walk' && s.ok && s.path && s.path.length) ({ x: bx, y: by, z: bz } = along(world.body, s.path));
+  }
+
+  // Where any visitor is right now (it walks too).
+  const s0 = cur.s, guests = {};
+  for (const [who, b] of Object.entries(world.guests)) guests[who] = { x: b.x, y: b.y, z: A.levelOf(world, b) };
+  if (s0.kind === 'guest' && s0.tool === 'arrive' && s0.body) guests[s0.who] = { x: s0.body.x, y: s0.body.y, z: A.levelOf(world, s0.body) };
+  if (s0.kind === 'guest' && s0.tool === 'walk' && s0.ok && s0.path && s0.path.length && guests[s0.who]) guests[s0.who] = along(world.guests[s0.who] || guests[s0.who], s0.path);
+
+  // The rules at this moment, with everyone where they are now.
+  const scene = ruledNow(i, [...(bx !== null ? [{ who: 'islander', x: bx, y: by, z: bz }] : []), ...Object.entries(guests).map(([who, q]) => ({ who, ...q }))]);
+  const bg = background(scene, world.sky && world.sky.night ? 0 : Math.round(warmthAt(cur.s.t || R.start) * 5) / 5), mw = bg.width / bgRes, mh = bg.height / bgRes, ms = performance.now();
+  // Where a world position (in steps; z in pixels up, for 3D) is in the background picture.
+  const at = (X, Y, z) => view3d ? A.isoPoint(isoView, X, Y, z || 0).map(v => v / bgRes) : [X * T, Y * T];
+  const feet = (x, y, z) => view3d ? at(x + 0.5, y + 0.5, z * A.LEVEL) : at(x + 0.5, y + 1);
+  let scale = Math.min(W / mw, H / mh), ox, oy;
+  const fit = scale;
+  // Moved by hand (drag, wheel, pinch): the view stays where it was put.
+  if (cam) { scale = cam.s; ox = W / 2 - cam.cx * scale; oy = H / 2 - cam.cy * scale; }
+  else if (follow && bx !== null) {
+    // Close-up on the islander; with Tide around, wide enough to keep both in view.
+    const pts = [{ x: bx, y: by, z: bz }, ...Object.values(guests)].map(q => feet(q.x, q.y, q.z));
+    const pad = view3d ? 110 : 70;
+    const minX = Math.min(...pts.map(q => q[0])) - pad, maxX = Math.max(...pts.map(q => q[0])) + pad;
+    const minY = Math.min(...pts.map(q => q[1])) - pad * 1.3, maxY = Math.max(...pts.map(q => q[1])) + pad * 0.7;
+    scale = Math.min(scale * 3, W / (maxX - minX), H / (maxY - minY));
+    ox = W / 2 - (minX + maxX) / 2 * scale; oy = H / 2 - (minY + maxY) / 2 * scale;
+  } else { ox = (W - mw * scale) / 2; oy = (H - mh * scale) / 2; }
+  lastView = { scale, ox, oy, W, H, fit, mw, mh };
+  const scr =(X, Y, z) => { const [px, py] = at(X, Y, z); return [ox + px * scale, oy + py * scale]; };
+  if (view3d) {
+    // The sky and the open sea go on past the edges of the picture.
+    const sc = A.skyColors(bgWarm), top = oy, hy = oy + isoView.oy / bgRes * scale, bottom = oy + mh * scale, grad = g.createLinearGradient(0, top, 0, bottom);
+    const f = y => Math.max(0, Math.min(1, (y - top) / Math.max(1, bottom - top))), rgb = c => `rgb(${c.map(Math.round)})`;
+    const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+    for (const k of [0, 0.25, 0.5, 0.75, 1]) grad.addColorStop(f(top + (hy - top) * k), rgb(mix(sc.top, sc.horizon, Math.pow(k, 1.6))));
+    grad.addColorStop(Math.min(1, f(hy) + 0.0001), rgb(sc.seaNear)); grad.addColorStop(1, rgb(sc.seaFar));
+    g.fillStyle = grad; g.fillRect(0, 0, W, H);
+  } else { g.fillStyle = 'rgb(' + A.SEA.join(',') + ')'; g.fillRect(0, 0, W, H); }
+  g.imageSmoothingEnabled = view3d; g.imageSmoothingQuality = 'high';
+  g.drawImage(bg, ox, oy, mw * scale, mh * scale);
+  g.imageSmoothingEnabled = false;
+  // The waves and foam, drawn apart and kept to the water that shows.
+  fxCanvas = fxCanvas || document.createElement('canvas');
+  if (fxCanvas.width !== cv.width || fxCanvas.height !== cv.height) { fxCanvas.width = cv.width; fxCanvas.height = cv.height; }
+  const fx = fxCanvas.getContext('2d');
+  fx.setTransform(1, 0, 0, 1, 0, 0); fx.clearRect(0, 0, fxCanvas.width, fxCanvas.height); fx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawSea(fx, scr, scale, ms);
+  if (seaMaskCanvas) { fx.globalCompositeOperation = 'destination-in'; fx.imageSmoothingEnabled = true; fx.drawImage(seaMaskCanvas, ox, oy, mw * scale, mh * scale); fx.globalCompositeOperation = 'source-over'; }
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(fxCanvas, 0, 0); g.restore();
+  drawMoving(g, scr, scale, ms, scene.world);
+  drawLight(g, W, H, cur.s.t || R.start, cur.s.kind === 'sleep' && R.endedBy === 'sunset');
+  drawGlows(g, scr, scale, scene.glows, world.sky && world.sky.night ? 1 : warmthAt(cur.s.t || R.start));
+
+  // A "look" shows the picture frame the islander saw (flat view only).
+  const s = cur.s;
+  if (!view3d && s.kind === 'world' && s.tool === 'look' && s.ok && s.view) {
+    const [vx, vy, vw, vh] = s.view;
+    g.strokeStyle = `rgba(255,255,255,${0.9 * (1 - p * 0.6)})`; g.lineWidth = 2; g.setLineDash([6, 4]);
+    g.strokeRect(ox + vx * T * scale, oy + vy * T * scale, vw * T * scale, vh * T * scale); g.setLineDash([]);
+  }
+  if (!view3d && (s.kind === 'world' || s.kind === 'guest') && s.ok && ['paint', 'shape', 'place', 'remove'].includes(s.tool)) {
+    g.strokeStyle = `rgba(255,255,255,${1 - p})`; g.lineWidth = 2;
+    const tiles = s.tool === 'paint' || s.tool === 'shape' ? s.tiles : s.thing ? [[s.thing.x, s.thing.y]] : [];
+    for (const [x, y] of tiles) g.strokeRect(ox + x * T * scale, oy + y * T * scale, T * scale, T * scale);
+  }
+  if (!view3d && (s.kind === 'world' || s.kind === 'guest') && s.ok && s.tool === 'build' && s.op) {
+    const [a, b] = [s.op.from, s.op.to], x0 = Math.min(a[0], b[0]), y0 = Math.min(a[1], b[1]);
+    g.strokeStyle = `rgba(255,255,255,${1 - p})`; g.lineWidth = 2;
+    g.strokeRect(ox + x0 * T * scale, oy + y0 * T * scale, (Math.abs(a[0] - b[0]) + 1) * T * scale, (Math.abs(a[1] - b[1]) + 1) * T * scale);
+  }
+
+  // A body standing at (x, y): returns where its head is, for speech bubbles.
+  const drawBody = (spr, x, y, z, lift) => {
+    if (view3d && spr.iso) {
+      const [fx, fy] = scr(x + 0.5, y + 0.5, z * A.LEVEL), m = spr.iso;
+      footShadow(g, fx, fy, Math.min(15, m.c.width * 0.3) * scale, scale);
+      g.drawImage(m.c, fx - m.ax * scale, fy - m.ay * scale - (lift || 0), m.c.width * scale, m.c.height * scale);
+      return [fx, fy - (m.ay - m.top) * scale - 6];
+    }
+    const k = view3d ? A.SPRITE : 1, [fx, fy] = scr(...(view3d ? [x + 0.5, y + 0.5, z * A.LEVEL] : [x + 0.5, y + 1]));
+    const w = spr.width * k * scale, h = spr.height * k * scale;
+    footShadow(g, fx, fy - (view3d ? 0 : scale), Math.min(view3d ? 15 * scale : 9 * scale, w * 0.42), view3d ? scale : scale * 0.6);
+    drawInked(g, ((view3d || spr.vector) && spr.smooth) || spr, fx - w / 2, fy - h - (lift || 0), w, h, scale);
+    return [fx, fy - h - 6];
+  };
+
+  if (bx !== null && bodyFrames) {
+    const bob = s.kind === 'world' && s.tool === 'walk' ? Math.abs(Math.round(Math.sin(p * Math.PI * 2 * Math.max(1, (s.path || []).length)) * scale * 0.6)) : 0;
+    const spr = bodyFrames[Math.floor(ms / bodyFrames.frameMs) % bodyFrames.length];
+    const [headX, headY] = drawBody(spr, bx, by, bz, bob);
+    if (s.who) { /* Tide's own words and notebook: drawn over her, below */ }
+    else if (s.kind === 'say') bubble(g, headX, headY, s.text, false, W);
+    else if (s.kind === 'think') bubble(g, headX, headY, s.text, true, W);
+    else if (s.kind === 'notebook') bubble(g, headX, headY, notebookBubble(s), true, W);
+    else if (s.kind === 'world' && !s.ok) bubble(g, headX, headY, s.text, true, W);
+    else if (s.kind === 'world' && s.tool === 'say') bubble(g, headX, headY, s.said || '', false, W);
+    else if (s.kind === 'world' && s.tool === 'sleep') bubble(g, headX, headY, 'z z z', true, W);
+    else if (s.kind === 'world' && s.tool === 'watch') bubble(g, headX, headY, '🎬 ' + watching(s), true, W);
+    else if (s.kind === 'world' && s.tool === 'listen') bubble(g, headX, headY, s.heard && s.heard.length ? '👂 ' + s.heard.map(h => h.text).join(' / ') : 'listening…', true, W);
+    else if (s.kind === 'sleep' && R.endedBy) bubble(g, headX, headY, 'z z z', true, W);
+    else if (s.kind === 'waking') bubble(g, headX, headY, 'waking up…', true, W);
+    else if (s.kind === 'voice') bubble(g, W / 2, 12, 'A voice across the water: ' + s.text, false, W, true);
+  } else if (!s.who && (s.kind === 'say' || s.kind === 'think' || s.kind === 'notebook')) {
+    bubble(g, W / 2, 60, s.kind === 'notebook' ? `📓 ${s.tool} ${s.file || s.pattern || ''}` : s.text, s.kind !== 'say', W, true);
+  }
+
+  // Tide, and what she says when she's the one acting.
+  for (const [who, q] of Object.entries(guests)) {
+    const [hx, hy] = drawBody(guestSprite(who, ms), q.x, q.y, q.z, 0);
+    if (s.who !== who) continue;
+    if (s.kind === 'say') { bubble(g, hx, hy, s.text, false, W); continue; }
+    if (s.kind === 'think') { bubble(g, hx, hy, s.text, true, W); continue; }
+    if (s.kind === 'notebook') continue;  // her journal and files show in the log on the right, not over her
+    if (s.kind !== 'guest') continue;
+    if (s.tool === 'say') bubble(g, hx, hy, s.said || '', false, W);
+    else if (s.tool === 'arrive') bubble(g, hx, hy, 'arrives', true, W);
+    else if (s.tool === 'watch' && s.ok) bubble(g, hx, hy, '🎬 ' + watching(s), true, W);
+    else if (s.tool === 'listen') bubble(g, hx, hy, s.heard && s.heard.length ? '👂 ' + s.heard.map(h => h.text).join(' / ') : 'listening…', true, W);
+    else if (!s.ok) bubble(g, hx, hy, s.text || '', true, W);
+  }
+
+  $('clock').textContent = 'Island clock ' + hm(s.t || R.start);
+  $('scrub').value = Math.round(now / total * 1000);
+  highlight(i);
+}
+
+// "The islander builds 24 blocks of #a0522d (walls) from (30, 12, 1) to (34, 16, 3)."
+function buildLine(s, who) {
+  if (!s.op) return s.text || '';
+  const n = s.count == null ? '' : `${s.count} block${s.count === 1 ? '' : 's'} `, where = `from (${s.op.from.join(', ')}) to (${s.op.to.join(', ')})`;
+  if (s.count === 0) return `${who} ${s.op.mode === 'clear' ? 'clears' : 'builds'} ${where}, but nothing changes.`;
+  return s.op.mode === 'clear' ? `${who} clears ${n}${where}.` : `${who} builds ${n}of ${s.op.color} (${s.op.mode}) ${where}.`;
+}
+// A change of rules.txt ("The rules changed: 3 rules"), or a check with the rules tool.
+function rulesLine(s, who) {
+  if (!('rules' in s)) return `${who} checks the rules` + (s.works != null ? `: ${s.works} working${s.problems ? `, ${s.problems} not` : ''}.` : '.');
+  const n = s.rules ? s.rules.rules.length : 0, bad = s.rules ? s.rules.problems.length : 0;
+  return s.rules ? `The rules changed: ${n} rule${n === 1 ? '' : 's'}${bad ? ` (and ${bad} line${bad === 1 ? '' : 's'} not understood)` : ''}.` : 'The rules file is gone: no rules now.';
+}
+
+function notebookBubble(s) {
+  return `📓 ${s.tool === 'Read' ? 'reading' : s.tool === 'Write' || s.tool === 'Edit' ? 'writing' : 'looking through'} ${s.file || s.pattern || 'the notebook'}`;
+}
+
+function bubble(g, x, y, text, soft, W, top) {
+  const maxW = Math.min(360, W - 24), lines = [];
+  g.font = (soft ? 'italic ' : '') + '14px system-ui, sans-serif';
+  const words = text.replace(/\s+/g, ' ').trim().split(' ');
+  let line = '';
+  for (const w of words) {
+    const t = line ? line + ' ' + w : w;
+    if (g.measureText(t).width > maxW - 20 && line) { lines.push(line); line = w; } else line = t;
+  }
+  if (line) lines.push(line);
+  if (lines.length > 7) { lines.length = 7; lines[6] += ' …'; }
+  const lh = 18, bw = Math.min(maxW, Math.max(...lines.map(l => g.measureText(l).width)) + 20), bh = lines.length * lh + 14;
+  let bx = Math.max(8, Math.min(W - bw - 8, x - bw / 2)), by = top ? y : y - bh - 10;
+  if (by < 8) by = 8;
+  g.fillStyle = soft ? 'rgba(255,255,255,0.86)' : '#fff';
+  g.strokeStyle = 'rgba(0,0,0,0.25)'; g.lineWidth = 1;
+  g.beginPath(); g.roundRect(bx, by, bw, bh, 8); g.fill(); g.stroke();
+  if (!top) { g.beginPath(); g.moveTo(x - 6, by + bh); g.lineTo(x, by + bh + 8); g.lineTo(x + 6, by + bh); g.fill(); }
+  g.fillStyle = '#222';
+  lines.forEach((l, k) => g.fillText(l, bx + 10, by + 20 + k * lh));
+}
+
+// --- The written log beside the island ------------------------------------------
+function buildLog() {
+  const log = $('log'); log.innerHTML = '';
+  if (R.prompt) { const p = document.createElement('div'); p.className = 'prompt'; p.textContent = R.prompt; log.appendChild(p); }
+  timeline.forEach((e, i) => {
+    const s = e.s, row = document.createElement('div');
+    row.className = 'step ' + s.kind + (s.who && s.kind !== 'guest' ? ' guest' : '') + (s.ok === false ? ' fail' : ''); row.dataset.i = i;
+    const icon = { say: '💬', think: '💭', notebook: '📓', sleep: '🌙', waking: '🌅', voice: '🗣' }[s.kind]
+      || { look: '👁', walk: '🚶', paint: '🎨', place: '🖼', remove: '✋', looks: '🪞', say: '🗨', listen: '👂', watch: '🎬', arrive: '⛵', leave: '⛵', sleep: '🌙', build: '🧱', rules: '📜', sky: '🌗' }[s.tool] || '•';
+    let text;
+    if (s.kind === 'say' || s.kind === 'think') text = (s.who ? 'Tide: ' : '') + s.text;
+    else if (s.kind === 'notebook') text = (s.who ? 'Tide: ' : '') + `${{ Write: 'Wrote', Edit: 'Changed', Read: 'Read', Glob: 'Looked through', Grep: 'Searched' }[s.tool] || s.tool} ${s.file || s.pattern || ''}`;
+    else if (s.kind === 'sleep') text = R.endedBy === 'rest' ? 'It ended its day.' : R.endedBy === 'caretaker' ? 'You ended the day early.' : 'The sun set. It fell asleep.';
+    else if (s.kind === 'waking') text = 'Waking up…';
+    else if (s.kind === 'voice') text = 'You: ' + s.text;
+    else if (s.tool === 'looks' && s.kind !== 'guest') text = 'It looks different now: it drew itself.';
+    else if (s.kind === 'guest') text = !s.ok ? `Tide: ${s.text}` : {
+      arrive: 'Tide wakes up.', leave: 'Tide falls asleep.', say: `Tide: "${s.said || ''}"`, look: 'Tide looks around.',
+      walk: s.body ? `Tide walks to (${s.body.x}, ${s.body.y}).` : `Tide: ${s.text}`,
+      listen: 'Tide listens' + (s.heard && s.heard.length ? ' and hears: ' + s.heard.map(h => h.text).join(' / ') : '.'),
+      paint: 'color' in s ? `Tide paints ${(s.tiles || []).length} steps ${s.color || 'back to how they were'}${s.edges ? `, with ${s.edges} edges` : ''}.` : `Tide makes the edges of ${(s.tiles || []).length} steps ${s.edges}.`,
+      shape: 'level' in s ? `Tide shapes ${(s.tiles || []).length} steps to height ${s.level}${s.edges ? `, with ${s.edges} edges` : ''}.` : `Tide makes the edges of ${(s.tiles || []).length} steps ${s.edges}.`,
+      place: `Tide places "${s.thing ? s.thing.name : ''}".`, remove: 'Tide takes something away.', looks: 'Tide drew herself.',
+      watch: 'Tide is ' + watching(s) + '.',
+      build: buildLine(s, 'Tide'), rules: rulesLine(s, 'Tide'), sky: 'Tide: ' + (s.text || 'changes the sky.'),
+    }[s.tool] || s.text || s.tool;
+    else if (s.tool === 'sky' && s.ok) text = 'The islander: ' + (s.text || 'changes the sky.');
+    else if (s.tool === 'build' && s.ok) text = buildLine(s, 'The islander');
+    else if (s.tool === 'rules' && s.ok) text = rulesLine(s, 'The islander');
+    else if (s.tool === 'say' && s.ok) text = `Islander: "${s.said || ''}"`;
+    else if (s.tool === 'watch' && s.ok) text = 'The islander is ' + watching(s) + '.';
+    else if (s.tool === 'sleep') text = 'The islander ends its day and falls asleep. The visitor is still here.';
+    else text = s.text || s.tool;
+    row.innerHTML = `<span class="t">${hm(s.t || R.start)}</span><span>${icon}</span><span class="txt"></span>`;
+    const box = row.querySelector('.txt'); box.textContent = text;
+    const drawingText = s.kind === 'notebook' && s.tool === 'Write' && /^drawings\//.test(s.file) ? s.content : null;
+    const drawing = s.tool === 'looks' ? s.drawing : s.tool === 'place' && s.thing ? s.thing.drawing : null;
+    if (drawingText || drawing) {
+      try {
+        const d0 = drawing || A.parseDrawing(drawingText, 128), d = s.tool === 'looks' ? A.frontView(d0) : d0, c0 = spriteCanvas(d), c = d.vector ? c0.smooth : c0, z = Math.max(1, Math.floor(128 / Math.max(d.w, d.h)));
+        c.className = 'drawing' + (d.vector ? ' vector' : ''); c.style.width = d.w * z + 'px'; c.style.height = d.h * z + 'px'; box.appendChild(c);
+      } catch { /* not a valid drawing; the text below still shows */ }
+    }
+    if (s.kind === 'notebook' && s.content && !drawing) {
+      const det = document.createElement('details'), sum = document.createElement('summary'), pre = document.createElement('pre');
+      sum.textContent = 'show'; pre.textContent = s.content; det.append(sum, pre); box.appendChild(det);
+    }
+    row.onclick = ev => { if (ev.target.closest('details')) return; now = e.from; setLogFollow(true); render(); voiceSeek(true); };
+    log.appendChild(row);
+  });
+}
+
+let lastHi = -1;
+function highlight(i) {
+  if (i === lastHi) return;
+  const log = $('log'), old = log.querySelector('.step.now'), row = log.querySelector(`.step[data-i="${i}"]`);
+  if (old) old.classList.remove('now');
+  if (row) { row.classList.add('now'); if (playing && logFollow) showInLog(row); }
+  lastHi = i;
+}
+// Brings a line into view by scrolling the log box only, never the page (scrollIntoView would move the page too).
+function showInLog(row) {
+  const log = $('log'), a = row.getBoundingClientRect(), b = log.getBoundingClientRect();
+  if (a.top < b.top) setLogTop(log.scrollTop + a.top - b.top);
+  else if (a.bottom > b.bottom) setLogTop(log.scrollTop + a.bottom - b.bottom);
+}
+// The log's own scrolling goes through here, so any other scroll (wheel, finger, scrollbar, keys) is the reader's.
+let logSetTop = 0;
+function setLogTop(t) { const log = $('log'); log.scrollTop = t; logSetTop = log.scrollTop; }
+
+// Reading the log, as in a chat: as soon as you scroll it yourself, however you do it, it stays where you put it
+// (no jumping to each new line), until you click a line, press Play or "Back to now".
+let logFollow = true;
+function setLogFollow(on) {
+  logFollow = on; $('lognow').hidden = on;
+  if (on) { const row = $('log').querySelector('.step.now'); if (row) showInLog(row); }
+}
+$('log').addEventListener('scroll', () => {
+  const log = $('log');
+  if (Math.abs(log.scrollTop - logSetTop) < 2) return;  // the log's own scrolling
+  logSetTop = log.scrollTop;
+  if (logFollow) { logFollow = false; $('lognow').hidden = false; }
+}, { passive: true });
+$('lognow').onclick = () => setLogFollow(true);
+
+// --- Controls ---------------------------------------------------------------------
+function setPlaying(on) {
+  playing = on; $('play').textContent = on ? 'Pause' : 'Play'; lastFrame = performance.now();
+  if (!on && typeof voiceSeek === 'function' && 'speechSynthesis' in window && now < total) voiceSeek(false);
+}
+$('play').onclick = () => { if (now >= total) now = 0; setPlaying(!playing); if (playing) setLogFollow(true); };
+$('speed').onchange = e => { speed = Number(e.target.value); };
+// Close-up on the islander, or the whole island. The choice is remembered in this browser.
+function setFollow(on) {
+  follow = on; cam = null; $('camreset').hidden = true;
+  $('follow').textContent = on ? 'Show whole island' : 'Follow the islander';
+  try { localStorage.setItem('island.follow', on ? '1' : '0'); } catch { /* fine without it */ }
+  render();
+}
+$('follow').onclick = () => setFollow(!follow);
+try { if (localStorage.getItem('island.follow') === '0') follow = false; } catch { /* default: follow */ }
+$('follow').textContent = follow ? 'Show whole island' : 'Follow the islander';
+$('scrub').oninput = e => { now = e.target.value / 1000 * total; render(); voiceSeek(false); };
+
+// --- Voice: the islander's words spoken aloud, with the voice it chose (voice.txt -> R.voice) ----------
+// Its words are what it says (its replies and `say`), not its thoughts or its notebook. The visitor has
+// its own fixed voice. Playback waits for a sentence to finish. Off above 2× speed.
+const canSpeak = 'speechSynthesis' in window;
+let voiceOn = false, voices = [], lastSpoken = -1, holdIdx = -1;
+try { voiceOn = canSpeak && localStorage.getItem('island.voice') === '1'; } catch { /* default: off */ }
+// English voices only (the owner's choice).
+const englishVoices = () => speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
+if (canSpeak) { voices = englishVoices(); speechSynthesis.onvoiceschanged = () => { voices = englishVoices(); }; }
+const speaking = () => canSpeak && (speechSynthesis.speaking || speechSynthesis.pending);
+
+function showVoiceButton() {
+  $('voice').textContent = voiceOn ? '🔊 Voice on' : '🔈 Voice off';
+  $('voice').classList.toggle('on', voiceOn);
+  $('voice').hidden = !canSpeak;
+}
+$('voice').onclick = () => {
+  voiceOn = !voiceOn;
+  try { localStorage.setItem('island.voice', voiceOn ? '1' : '0'); } catch { /* fine */ }
+  if (!voiceOn) speechSynthesis.cancel(); else lastSpoken = currentIndex() - 1;
+  showVoiceButton();
+};
+showVoiceButton();
+
+// Edge offers free natural-sounding AI voices ("Microsoft Guy Online (Natural)" and so on); they're preferred
+// whenever the viewer has them. Elsewhere it falls back to Windows' own voices (David, Zira, Mark).
+const MEN = ['guy', 'christopher', 'eric', 'roger', 'steffan', 'ryan', 'andrew', 'brian', 'davis', 'tony', 'jason', 'thomas', 'william', 'liam', 'connor', 'mitchell', 'david', 'mark'];
+const WOMEN = ['aria', 'jenny', 'michelle', 'ana', 'emma', 'ava', 'sonia', 'libby', 'maisie', 'natasha', 'clara', 'sara', 'jane', 'nancy', 'zira', 'hazel', 'susan', 'female'];
+const isNatural = v => /natural/i.test(v.name);
+const named = (v, list) => list.some(n => new RegExp('\\b' + n + '\\b', 'i').test(v.name));
+// A voice they asked for by name (a natural one first), or else the best voice from the list given.
+function chooseVoice(name, list, avoid) {
+  if (name && name.toLowerCase() !== 'default') {
+    const want = voices.filter(v => v.name.toLowerCase().includes(name.toLowerCase()));
+    const v = want.find(isNatural) || want[0];
+    if (v) return v;
+  }
+  for (const n of list) { const v = voices.find(v => v !== avoid && isNatural(v) && named(v, [n])); if (v) return v; }
+  for (const n of list) { const v = voices.find(v => v !== avoid && named(v, [n])); if (v) return v; }
+  return voices.find(v => v !== avoid && isNatural(v)) || voices.find(v => v !== avoid) || null;
+}
+
+// The islander: its own choice (voice.txt), or else a man's voice.
+function pickVoice(name, avoid) { return chooseVoice(name, MEN, avoid); }
+
+// The visitor: her own choice (letters/visitor-voice.txt), or else a woman's voice.
+function pickVisitorVoice(name, avoid) { return chooseVoice(name, WOMEN, avoid); }
+
+function spokenLine(s) {
+  if (s.kind === 'say') return { who: 'islander', text: s.text };
+  if (s.kind === 'world' && s.tool === 'say' && s.ok) return { who: 'islander', text: s.said };
+  if (s.kind === 'guest' && s.tool === 'say' && s.ok) return { who: 'visitor', text: s.said };
+  return null;
+}
+
+function speak(text, who) {
+  const clean = String(text || '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|]/g, '').replace(/^\s*[-•]\s+/gm, '').trim();
+  // Only English is spoken: a line written in Greek letters stays silent.
+  if (!clean || /[Ͱ-Ͽἀ-῿]/.test(clean)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(clean);
+  const set = (R && R.voice) || {}, mine = pickVoice(set.voice);
+  if (who === 'visitor') {
+    const vs = (R && R.visitorVoice) || {};
+    u.voice = pickVisitorVoice(vs.voice, mine); u.pitch = vs.pitch || 1; u.rate = vs.speed || 1;
+  } else { u.voice = mine; u.pitch = set.pitch || 1; u.rate = set.speed || 1; }
+  if (u.voice) u.lang = u.voice.lang;
+  speechSynthesis.speak(u);
+}
+
+// Called every frame while playing: speak a step's words when it starts.
+function voiceStep() {
+  if (!voiceOn || !canSpeak || speed > 2) return;
+  const i = currentIndex();
+  if (i === lastSpoken) return;
+  lastSpoken = i;
+  const line = spokenLine(timeline[i].s);
+  if (line) { speak(line.text, line.who); holdIdx = i; }
+}
+
+// Jumping around stops the voice. A click on a line of the log speaks that line.
+function voiceSeek(speakHere) {
+  if (!canSpeak) return;
+  speechSynthesis.cancel();
+  holdIdx = -1;
+  lastSpoken = speakHere ? -1 : currentIndex();
+}
+// --- Moving around: drag to move, the wheel or a pinch to zoom, double-click to go back ----------------
+// cam is where the view was put by hand: the picture point (cx, cy) at the middle of the canvas, and the scale.
+// It starts from whatever was showing, and stays until "back", the follow button or a change of view.
+let cam = null, lastView = null;
+function takeCam() {
+  const v = lastView;
+  if (!cam && v) { cam = { cx: (v.W / 2 - v.ox) / v.scale, cy: (v.H / 2 - v.oy) / v.scale, s: v.scale }; $('camreset').hidden = false; }
+  return cam;
+}
+// Not so far out or in that the island is lost, and the middle of the view stays over the picture.
+function clampCam() {
+  const v = lastView;
+  cam.s = Math.max(v.fit * 0.6, Math.min(v.fit * 16, cam.s));
+  cam.cx = Math.max(0, Math.min(v.mw, cam.cx)); cam.cy = Math.max(0, Math.min(v.mh, cam.cy));
+}
+// Zoom by k, keeping the point under (mx, my) on the canvas where it is.
+function zoomAt(k, mx, my) {
+  if (!takeCam()) return;
+  const v = lastView, px = cam.cx + (mx - v.W / 2) / cam.s, py = cam.cy + (my - v.H / 2) / cam.s;
+  cam.s *= k; clampCam();
+  cam.cx = px - (mx - v.W / 2) / cam.s; cam.cy = py - (my - v.H / 2) / cam.s; clampCam();
+  render();
+}
+function panBy(dx, dy) {
+  if (!takeCam()) return;
+  cam.cx -= dx / cam.s; cam.cy -= dy / cam.s; clampCam();
+  render();
+}
+function resetCam() { cam = null; $('camreset').hidden = true; render(); }
+const zoomMiddle = k => { const cv = $('cv'); zoomAt(k, cv.clientWidth / 2, cv.clientHeight / 2); };
+$('zoomin').onclick = () => zoomMiddle(1.5);
+$('zoomout').onclick = () => zoomMiddle(1 / 1.5);
+$('camreset').onclick = resetCam;
+{
+  // One finger or the mouse drags (after a few pixels, so a click doesn't move anything); two fingers pinch.
+  const cv = $('cv'), pointers = new Map();
+  let dragging = false, pinch = 0;
+  cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.offsetX, e.offsetY]); dragging = false; pinch = 0; });
+  cv.addEventListener('pointermove', e => {
+    const was = pointers.get(e.pointerId), p = [e.offsetX, e.offsetY];
+    if (!was) return;
+    if (pointers.size === 1) {
+      if (!dragging && Math.hypot(p[0] - was[0], p[1] - was[1]) < 4) return;
+      if (!dragging) { dragging = true; cv.classList.add('dragging'); }
+      panBy(p[0] - was[0], p[1] - was[1]);
+    }
+    pointers.set(e.pointerId, p);
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (pinch && d) zoomAt(d / pinch, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+      pinch = d;
+    }
+  });
+  const lift = e => { pointers.delete(e.pointerId); pinch = 0; if (!pointers.size) { dragging = false; cv.classList.remove('dragging'); } };
+  cv.addEventListener('pointerup', lift); cv.addEventListener('pointercancel', lift);
+  cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), e.offsetX, e.offsetY); }, { passive: false });
+  cv.addEventListener('dblclick', resetCam);
+}
+
+// Space plays/pauses; + and − zoom, the arrows move, 0 goes back. Not while typing (the talk box) or using a menu or button.
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const step = 80, move = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+  if (e.code === 'Space') $('play').click();
+  else if (e.key === '+' || e.key === '=') zoomMiddle(1.5);
+  else if (e.key === '-') zoomMiddle(1 / 1.5);
+  else if (e.key === '0') resetCam();
+  else if (move) panBy(...move);
+  else return;
+  e.preventDefault();
+});
+window.addEventListener('resize', render);
+
+// 3D or flat from above. The choice is remembered in this browser.
+function setView3d(on) {
+  view3d = on; bgDirty = true; cam = null; $('camreset').hidden = true;
+  $('view3d').textContent = on ? 'Flat view' : '3D view';
+  try { localStorage.setItem('island.view3d', on ? '1' : '0'); } catch { /* fine without it */ }
+  render();
+}
+$('view3d').onclick = () => setView3d(!view3d);
+try { view3d = localStorage.getItem('island.view3d') !== '0'; } catch { /* default: 3D */ }
+$('view3d').textContent = view3d ? 'Flat view' : '3D view';
+
+function frame(t) {
+  if (playing && R) {
+    let next = Math.max(0, now + Math.max(0, t - lastFrame) * speed);
+    // Hold at the end of a spoken step until its sentence is finished.
+    if (voiceOn && holdIdx >= 0 && timeline[holdIdx] && speaking() && next >= timeline[holdIdx].to) next = Math.max(now, timeline[holdIdx].to - 1);
+    now = next;
+    if (now >= total) { now = total; if (!(voiceOn && speaking())) setPlaying(false); }
+    render();
+    voiceStep();
+  } else if (R && world) render();  // the sea and moving things keep moving while paused
+  lastFrame = t;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

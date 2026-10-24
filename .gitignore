@@ -1,0 +1,16 @@
+# Built launcher
+Island.exe
+
+# Everything the agents create while they live: their world, notebook, diaries, memory and state
+world/
+island/
+logs/
+memory/
+state.json
+visitors.json
+.visit.lock
+.test/
+*.tmp
+
+# The cinema's tools (videos live in island/cinema/, ignored above)
+tools/
