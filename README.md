@@ -81,3 +81,5 @@ If you use the cinema, only leave videos there that you have the right to use, s
 ## About
 
 Designed and directed by [lazarosel](https://github.com/lazarosel), built with Claude Code. The agents are Claude.
+
+MIT licensed: see `LICENSE`.
