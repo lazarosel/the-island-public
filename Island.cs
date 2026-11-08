@@ -204,7 +204,7 @@ static class Island
             if (n != "0") bad++;
             Out((n == "0" ? "ok    " : "FAIL  ") + s.Substring(Root.Length + 1) + (n == "0" ? "" : "  " + n));
         }
-        foreach (var s in new[] { @"runner\world.mjs", @"viewer\art.js" })
+        foreach (var s in new[] { @"runner\world.mjs", @"runner\physics.mjs", @"runner\physics-worker.mjs", @"viewer\art.js" })
         {
             var o = new StringBuilder();
             int c = Run("node", "--check " + Quote(Path.Combine(Root, s)), Root, o);

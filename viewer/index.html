@@ -229,6 +229,7 @@ function durationOf(s) {
   if (s.tool === 'watch' && s.ok) return 2500;
   if (s.kind === 'world' && s.tool === 'sleep') return 2500;
   if (s.kind === 'guest') return s.tool === 'walk' && s.ok ? Math.max(400, (s.path || []).length * 170) : 1100;
+  if (s.tool === 'nature') return 150;  // their physics: frequent and small, so it passes quickly
   if (s.kind === 'world') {
     if (!s.ok) return 1200;
     if (s.tool === 'walk') return Math.max(400, (s.path || []).length * 170);
@@ -244,6 +245,7 @@ function buildTimeline() {
   if (R.endedBy === 'live') {
     if (!timeline.length) { timeline.push({ s: { kind: 'waking', t: R.start }, from: 0, to: 1500 }); total = 1500; }
   } else { timeline.push({ s: { kind: 'sleep', t: R.end }, from: total, to: total + 2500 }); total += 2500; }
+  collectNature();
 }
 
 function showMeta() {
@@ -257,6 +259,7 @@ function showMeta() {
 }
 
 function setupDay() {
+  natureCells.clear(); natureMoved.clear(); ruleThings.clear();
   buildTimeline();
   // A live day opens near its latest steps; a finished day plays from the start.
   now = R.endedBy === 'live' ? timeline[Math.max(0, timeline.length - 3)].from : 0;
@@ -270,7 +273,8 @@ function hm(iso) { const d = new Date(iso); return String(d.getHours()).padStart
 function resetWorld() {
   const st = R.startState;
   world = { map: R.map, paint: { ...(st ? st.paint : {}) }, height: { ...(st && st.height ? st.height : {}) }, smooth: { ...(st && st.smooth ? st.smooth : {}) }, things: st ? st.things.map(t => ({ ...t })) : [], body: st ? { ...st.body } : null, looks: st ? st.looks : null, guests: {},
-    blocks: { ...(st && st.blocks ? st.blocks : {}) }, rules: st ? st.rules || null : null, sky: st && st.sky ? { ...st.sky } : {} };
+    blocks: { ...(st && st.blocks ? st.blocks : {}) }, water: { ...(st && st.water ? st.water : {}) }, rules: st ? st.rules || null : null, sky: st && st.sky ? { ...st.sky } : {} };
+  glides.clear();
   saidList = R.steps.filter(s => s.tool === 'say' && s.ok && s.said).map(s => ({ who: s.kind === 'guest' ? s.who : 'islander', text: s.said, t: Date.parse(s.t) }));
   ruledCache = null;
   bodyFrames = world.looks ? bodySprites(world.looks) : null;
@@ -306,7 +310,60 @@ function changeWorld(s) {
   if (s.tool === 'remove') { world.things = world.things.filter(t => t.id !== s.id); bgDirty = true; }
 }
 
+// Their own physics (island/physics/*.js) at work: the engine recorded each change, so a replay just plays them.
+// Everything their physics ever touches today (blocks, water, things) is left out of the still background and drawn
+// fresh each frame instead, so a ferry moving every two seconds never makes the whole island be drawn again.
+// A thing a script moves glides there.
+// The same goes for what their rules can change: a thing a rule shows, hides, swaps or moves is drawn each frame, and
+// blocks a rule can open too, so a rule switching on and off as someone walks by never redraws the whole island.
+const natureMoved = new Set(), natureCells = new Set(), ruleThings = new Set(), glides = new Map();
+function collectRules(rules) {
+  for (const r of (rules && rules.rules) || []) {
+    const a = r.then;
+    if (a.thing) ruleThings.add(a.thing);
+    if (a.kind === 'open') {
+      const [p, q] = a.box;
+      for (let z = Math.min(p[2], q[2]); z <= Math.max(p[2], q[2]); z++) for (let y = Math.min(p[1], q[1]); y <= Math.max(p[1], q[1]); y++)
+        for (let x = Math.min(p[0], q[0]); x <= Math.max(p[0], q[0]); x++) natureCells.add(x + ',' + y + ',' + z);
+    }
+  }
+}
+function collectNature() {
+  const cells = natureCells.size, things = natureMoved.size + ruleThings.size;
+  if (R.startState) collectRules(R.startState.rules);
+  for (const e of timeline) {
+    if (e.s.tool === 'rules' && e.s.rules) collectRules(e.s.rules);
+    if (e.s.tool === 'nature') for (const c of e.s.changes || []) {
+      if (c.kind === 'block' || c.kind === 'water') natureCells.add(c.x + ',' + c.y + ',' + c.z);
+      else if (c.kind === 'move') natureMoved.add(c.thing);
+    }
+  }
+  if (natureCells.size !== cells || natureMoved.size + ruleThings.size !== things) bgDirty = true;
+}
+function applyNature(s) {
+  for (const c of s.changes || []) {
+    const k = c.x + ',' + c.y + ',' + c.z;
+    if (c.kind === 'block') { if (c.color) world.blocks[k] = c.color; else delete world.blocks[k]; }
+    else if (c.kind === 'water') { world.water = world.water || {}; if (c.color) world.water[k] = c.color; else delete world.water[k]; }
+    else if (c.kind === 'move') {
+      world.things = world.things.map(t => {
+        if (t.id !== c.thing) return t;
+        const u = { ...t, x: c.x, y: c.y };
+        [u.px, u.py] = A.bodyOrigin(t.drawing, c.x, c.y);
+        if (c.z == null) delete u.z; else u.z = c.z;
+        glides.set(t.id, { from: c.from || [t.x, t.y, A.levelOf(world, t)], at: performance.now() });
+        return u;
+      });
+    } else if (c.kind === 'drift') {
+      const b = { x: c.x, y: c.y, facing: (c.who === 'islander' ? world.body : world.guests[c.who] || {}).facing };
+      if (c.z != null) b.z = c.z;
+      if (c.who === 'islander') { if (world.body) world.body = b; } else if (world.guests[c.who]) world.guests[c.who] = b;
+    }
+  }
+}
+
 function apply(s) {
+  if (s.tool === 'nature') { applyNature(s); return; }
   if (s.kind === 'guest') {
     if (s.tool === 'arrive') { world.guests[s.who] = { ...s.body }; if (s.drawing) guestFrames[s.who] = bodySprites(s.drawing); }
     else if (s.tool === 'leave') delete world.guests[s.who];
@@ -375,7 +432,28 @@ const framesOf = t => { if (!thingFrames.has(t.drawing)) thingFrames.set(t.drawi
 // In 3D, models stay in the background (only upright drawings move).
 // In 3D the picture is drawn twice as fine (bgRes), so it can be shown large without pixel steps.
 let view3d = true, bgIs3d = null, isoView = null, bgRes = 1, seaTiles = [], shoreEdges = [], seaMaskCanvas = null, fxCanvas = null;
-const movesNow = t => A.isAnimated(t) && !(view3d && t.drawing.model);
+// (A 3D model that only animates stays in the picture, as before; one their physics or rules change is drawn each frame.)
+const movesNow = t => (A.isAnimated(t) && !(view3d && t.drawing.model)) || natureMoved.has(t.id) || ruleThings.has(t.name.toLowerCase());
+// A 3D model's picture, made once per drawing (the same way a body built of layers is drawn).
+const modelPics = new WeakMap();
+function modelPic(d) {
+  if (modelPics.has(d)) return modelPics.get(d);
+  const m = A.isoModelImage(d), c = document.createElement('canvas');
+  c.width = m.img.width; c.height = m.img.height;
+  c.getContext('2d').putImageData(new ImageData(m.img.data, m.img.width, m.img.height), 0, 0);
+  const pic = { c, ax: m.ax, ay: m.ay };
+  modelPics.set(d, pic);
+  return pic;
+}
+// Where a thing a script moved is drawn: gliding from where it was to where it went, over a little under a second.
+function glideOf(t) {
+  const g = glides.get(t.id);
+  if (!g) return [0, 0, 0];
+  const f = Math.min(1, (performance.now() - g.at) / 900);
+  if (f >= 1) { glides.delete(t.id); return [0, 0, 0]; }
+  const e = 1 - f * f * (3 - 2 * f), L = A.levelOf(world, t);
+  return [(g.from[0] - t.x) * e, (g.from[1] - t.y) * e, (g.from[2] - L) * e];
+}
 // The world as the rules make it right now (rules.txt), worked out again when the step or where someone stands changes.
 let saidList = [], ruledCache = null, bgKey = '', bgWarm = 0;
 function ruledNow(i, bodies) {
@@ -387,12 +465,29 @@ function ruledNow(i, bodies) {
   ruledCache = { key, r };
   return r;
 }
+// Everything the still picture is drawn from, as one string (the things that move are drawn each frame, so left out).
+let bgSig = '';
+function bgSignature(w) {
+  const things = (w.things || []).filter(t => !movesNow(t)).map(t => [t.id, t.name, t.x, t.y, t.z, t.px, t.py, t.drawing.w, t.drawing.h, t.drawing.frames ? t.drawing.frames.length : 0]);
+  return JSON.stringify([bgWarm, w.paint, w.height, w.smooth, w.blocks, w.water, things]);
+}
+
 // warm: how far the sky has turned toward sunset (in fifths, so it is redrawn only a few times a day).
 function background(scene, warm) {
   if (scene.key !== bgKey) { bgKey = scene.key; bgDirty = true; }
   if (view3d && warm !== bgWarm) { bgWarm = warm; bgDirty = true; }
   if (!bgDirty && bgCanvas && bgIs3d === view3d) return bgCanvas;
-  const w = scene.world;
+  // What their physics touches today is drawn each frame (drawNatureCells), not here.
+  let w = scene.world;
+  if (natureCells.size) {
+    const keep = cells => { const o = {}; for (const k in cells || {}) if (!natureCells.has(k)) o[k] = cells[k]; return o; };
+    w = { ...w, blocks: keep(w.blocks), water: keep(w.water) };
+  }
+  // A live day is reloaded every few seconds and replayed from the start, which marks the picture as changed even
+  // when nothing in it did. Drawing the whole island takes a second or two, so first check whether it really changed.
+  const sig = bgSignature(w);
+  if (bgCanvas && bgIs3d === view3d && sig === bgSig) { bgDirty = false; return bgCanvas; }
+  bgSig = sig;
   const img = view3d
     ? A.renderIso(w, 0, 0, w.map.w, w.map.h, { skip: movesNow, margin: 160, warm: bgWarm, res: 2 })
     : A.render(w, 0, 0, w.map.w, w.map.h, { skip: movesNow });
@@ -454,13 +549,41 @@ function drawSea(g, scr, scale, ms) {
   g.restore();
 }
 
+// Blocks and water their physics touches, drawn each frame as simple boxes (back to front), so moving them is cheap.
+function drawNatureCells(g, scr, scale, w) {
+  if (!natureCells.size) return;
+  const cells = [];
+  for (const k of natureCells) {
+    const c = (w.blocks && w.blocks[k]) || (w.water && w.water[k]);
+    if (c) { const [x, y, z] = k.split(',').map(Number); cells.push([x, y, z, A.parseColor(c) || [128, 128, 128, 255]]); }
+  }
+  cells.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]) || a[2] - b[2]);
+  const rgba = (c, f) => `rgba(${Math.round(c[0] * f)},${Math.round(c[1] * f)},${Math.round(c[2] * f)},${(c[3] / 255).toFixed(3)})`;
+  g.save();
+  g.lineWidth = Math.max(0.5, scale * 0.5); g.strokeStyle = `rgba(${A.INK},0.55)`; g.lineJoin = 'round';
+  const face = (pts, fill) => { g.beginPath(); g.moveTo(...pts[0]); for (const p of pts.slice(1)) g.lineTo(...p); g.closePath(); g.fillStyle = fill; g.fill(); g.stroke(); };
+  for (const [x, y, z, c] of cells) {
+    if (!view3d) { const [ax, ay] = scr(x, y), [bx, by] = scr(x + 1, y + 1); face([[ax, ay], [bx, ay], [bx, by], [ax, by]], rgba(c, 1)); continue; }
+    const lo = z * A.LEVEL, hi = (z + 1) * A.LEVEL, P = (X, Y, Z) => scr(X, Y, Z);
+    face([P(x, y + 1, lo), P(x + 1, y + 1, lo), P(x + 1, y + 1, hi), P(x, y + 1, hi)], rgba(c, 0.78));   // south side
+    face([P(x + 1, y, lo), P(x + 1, y + 1, lo), P(x + 1, y + 1, hi), P(x + 1, y, hi)], rgba(c, 0.62));   // east side
+    face([P(x, y, hi), P(x + 1, y, hi), P(x + 1, y + 1, hi), P(x, y + 1, hi)], rgba(c, 1));              // top
+  }
+  g.restore();
+}
+
 // Animated drawings and things that move by themselves (wander, circle, bob, sway).
 function drawMoving(g, scr, scale, ms, scene) {
   for (const t of scene.things) {
     if (!movesNow(t)) continue;
-    const m = A.motion(t, ms, scene), fr = framesOf(t), spr = fr[A.frameOf(t.drawing, ms) % fr.length];
-    if (view3d) {
-      const [fx, fy] = scr(t.x + 0.5 + m.dx / T, t.y + 0.5 + m.dy / T, A.movingLevel(scene, t, m) * A.LEVEL);
+    const m = A.motion(t, ms, scene), fr = framesOf(t), spr = fr[A.frameOf(t.drawing, ms) % fr.length], [gx, gy, gz] = glideOf(t);
+    m.dx += gx * T; m.dy += gy * T;
+    if (view3d && t.drawing.model) {
+      const [fx, fy] = scr(t.x + 0.5 + m.dx / T, t.y + 0.5 + m.dy / T, (A.movingLevel(scene, t, m) + gz) * A.LEVEL), p = modelPic(t.drawing);
+      footShadow(g, fx, fy, Math.min(15, p.c.width * 0.3) * scale, scale);
+      g.drawImage(p.c, fx - p.ax * scale, fy - p.ay * scale, p.c.width * scale, p.c.height * scale);
+    } else if (view3d) {
+      const [fx, fy] = scr(t.x + 0.5 + m.dx / T, t.y + 0.5 + m.dy / T, (A.movingLevel(scene, t, m) + gz) * A.LEVEL);
       const w = spr.width * A.SPRITE * scale, h = spr.height * A.SPRITE * scale;
       footShadow(g, fx, fy, w / 2, scale);
       drawInked(g, spr.smooth || spr, fx - w / 2, fy - h, w, h, scale);
@@ -639,6 +762,7 @@ function render() {
   drawSea(fx, scr, scale, ms);
   if (seaMaskCanvas) { fx.globalCompositeOperation = 'destination-in'; fx.imageSmoothingEnabled = true; fx.drawImage(seaMaskCanvas, ox, oy, mw * scale, mh * scale); fx.globalCompositeOperation = 'source-over'; }
   g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(fxCanvas, 0, 0); g.restore();
+  drawNatureCells(g, scr, scale, scene.world);
   drawMoving(g, scr, scale, ms, scene.world);
   drawLight(g, W, H, cur.s.t || R.start, cur.s.kind === 'sleep' && R.endedBy === 'sunset');
   drawGlows(g, scr, scale, scene.glows, world.sky && world.sky.night ? 1 : warmthAt(cur.s.t || R.start));
@@ -662,17 +786,27 @@ function render() {
   }
 
   // A body standing at (x, y): returns where its head is, for speech bubbles.
+  // In water (their physics, or the build tool's water), the lower half of a body is drawn under its surface.
+  const waterAround = (x, y, z) => world.water && world.water[Math.round(x) + ',' + Math.round(y) + ',' + Math.round(z)];
+  const underWater = (c, left, top, w, h) => {
+    const col = A.parseColor(c) || [58, 142, 224, 160];
+    g.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${Math.max(0.45, col[3] / 255 * 0.85)})`;
+    g.fillRect(left, top + h * 0.5, w, h * 0.5);
+  };
   const drawBody = (spr, x, y, z, lift) => {
+    const wet = waterAround(x, y, z);
     if (view3d && spr.iso) {
       const [fx, fy] = scr(x + 0.5, y + 0.5, z * A.LEVEL), m = spr.iso;
       footShadow(g, fx, fy, Math.min(15, m.c.width * 0.3) * scale, scale);
       g.drawImage(m.c, fx - m.ax * scale, fy - m.ay * scale - (lift || 0), m.c.width * scale, m.c.height * scale);
+      if (wet) underWater(wet, fx - m.ax * scale, fy - (m.ay - m.top) * scale, m.c.width * scale, (m.ay - m.top) * scale);
       return [fx, fy - (m.ay - m.top) * scale - 6];
     }
     const k = view3d ? A.SPRITE : 1, [fx, fy] = scr(...(view3d ? [x + 0.5, y + 0.5, z * A.LEVEL] : [x + 0.5, y + 1]));
     const w = spr.width * k * scale, h = spr.height * k * scale;
     footShadow(g, fx, fy - (view3d ? 0 : scale), Math.min(view3d ? 15 * scale : 9 * scale, w * 0.42), view3d ? scale : scale * 0.6);
     drawInked(g, ((view3d || spr.vector) && spr.smooth) || spr, fx - w / 2, fy - h - (lift || 0), w, h, scale);
+    if (wet) underWater(wet, fx - w / 2, fy - h - (lift || 0), w, h);
     return [fx, fy - h - 6];
   };
 
@@ -688,7 +822,7 @@ function render() {
     else if (s.kind === 'world' && s.tool === 'say') bubble(g, headX, headY, s.said || '', false, W);
     else if (s.kind === 'world' && s.tool === 'sleep') bubble(g, headX, headY, 'z z z', true, W);
     else if (s.kind === 'world' && s.tool === 'watch') bubble(g, headX, headY, '🎬 ' + watching(s), true, W);
-    else if (s.kind === 'world' && s.tool === 'listen') bubble(g, headX, headY, s.heard && s.heard.length ? '👂 ' + s.heard.map(h => h.text).join(' / ') : 'listening…', true, W);
+    else if (s.kind === 'world' && s.tool === 'listen') bubble(g, headX, headY, heardWho(s) ? '👂 hears ' + heardWho(s) : 'listening…', true, W);
     else if (s.kind === 'sleep' && R.endedBy) bubble(g, headX, headY, 'z z z', true, W);
     else if (s.kind === 'waking') bubble(g, headX, headY, 'waking up…', true, W);
     else if (s.kind === 'voice') bubble(g, W / 2, 12, 'A voice across the water: ' + s.text, false, W, true);
@@ -707,7 +841,7 @@ function render() {
     if (s.tool === 'say') bubble(g, hx, hy, s.said || '', false, W);
     else if (s.tool === 'arrive') bubble(g, hx, hy, 'arrives', true, W);
     else if (s.tool === 'watch' && s.ok) bubble(g, hx, hy, '🎬 ' + watching(s), true, W);
-    else if (s.tool === 'listen') bubble(g, hx, hy, s.heard && s.heard.length ? '👂 ' + s.heard.map(h => h.text).join(' / ') : 'listening…', true, W);
+    else if (s.tool === 'listen') bubble(g, hx, hy, heardWho(s) ? '👂 hears ' + heardWho(s) : 'listening…', true, W);
     else if (!s.ok) bubble(g, hx, hy, s.text || '', true, W);
   }
 
@@ -728,6 +862,22 @@ function rulesLine(s, who) {
   if (!('rules' in s)) return `${who} checks the rules` + (s.works != null ? `: ${s.works} working${s.problems ? `, ${s.problems} not` : ''}.` : '.');
   const n = s.rules ? s.rules.rules.length : 0, bad = s.rules ? s.rules.problems.length : 0;
   return s.rules ? `The rules changed: ${n} rule${n === 1 ? '' : 's'}${bad ? ` (and ${bad} line${bad === 1 ? '' : 's'} not understood)` : ''}.` : 'The rules file is gone: no rules now.';
+}
+
+// Who a listen heard, without repeating their words (those already have their own line when they were said):
+// "Tide", "you", "the islander". What the island itself tells (being carried, the evening reminder) is shown in full.
+function heardWho(s) {
+  const names = { visitor: 'Tide', islander: 'the islander', owner: 'you' };
+  const parts = [...new Set((s.heard || []).map(h => (h.from === 'island' ? `"${h.text}"` : names[h.from] || h.from)))];
+  return parts.join(' and ');
+}
+
+// "Their physics at work: ferry.js, current.js (carries the islander)." for the physics step at i.
+let lastNature = { seen: new Set(), t: 0 };
+function natureLine(i) {
+  const s = timeline[i].s, scripts = [...new Set((s.changes || []).map(c => c.script))].sort();
+  const carried = [...new Set((s.changes || []).filter(c => c.kind === 'drift').map(c => (c.who === 'islander' ? 'the islander' : 'Tide')))];
+  return `Their physics at work: ${scripts.join(', ') || 'a script'}${carried.length ? ` (carrying ${carried.join(' and ')})` : ''}.`;
 }
 
 function notebookBubble(s) {
@@ -759,23 +909,32 @@ function bubble(g, x, y, text, soft, W, top) {
 // --- The written log beside the island ------------------------------------------
 function buildLog() {
   const log = $('log'); log.innerHTML = '';
+  lastNature = { seen: new Set(), t: 0 };
   if (R.prompt) { const p = document.createElement('div'); p.className = 'prompt'; p.textContent = R.prompt; log.appendChild(p); }
   timeline.forEach((e, i) => {
-    const s = e.s, row = document.createElement('div');
+    const s = e.s;
+    // Their physics runs every couple of seconds: one line when a script is at work for the first time, or every 10 minutes.
+    if (s.tool === 'nature') {
+      const scripts = (s.changes || []).map(c => c.script), t = Date.parse(s.t || R.start);
+      if (scripts.every(n => lastNature.seen.has(n)) && t - lastNature.t < 10 * 60000) return;
+      scripts.forEach(n => lastNature.seen.add(n)); lastNature.t = t;
+    }
+    const row = document.createElement('div');
     row.className = 'step ' + s.kind + (s.who && s.kind !== 'guest' ? ' guest' : '') + (s.ok === false ? ' fail' : ''); row.dataset.i = i;
     const icon = { say: '💬', think: '💭', notebook: '📓', sleep: '🌙', waking: '🌅', voice: '🗣' }[s.kind]
-      || { look: '👁', walk: '🚶', paint: '🎨', place: '🖼', remove: '✋', looks: '🪞', say: '🗨', listen: '👂', watch: '🎬', arrive: '⛵', leave: '⛵', sleep: '🌙', build: '🧱', rules: '📜', sky: '🌗' }[s.tool] || '•';
+      || { look: '👁', walk: '🚶', paint: '🎨', place: '🖼', remove: '✋', looks: '🪞', say: '🗨', listen: '👂', watch: '🎬', arrive: '⛵', leave: '⛵', sleep: '🌙', build: '🧱', rules: '📜', sky: '🌗', nature: '🌊', physics: '⚙' }[s.tool] || '•';
     let text;
     if (s.kind === 'say' || s.kind === 'think') text = (s.who ? 'Tide: ' : '') + s.text;
     else if (s.kind === 'notebook') text = (s.who ? 'Tide: ' : '') + `${{ Write: 'Wrote', Edit: 'Changed', Read: 'Read', Glob: 'Looked through', Grep: 'Searched' }[s.tool] || s.tool} ${s.file || s.pattern || ''}`;
     else if (s.kind === 'sleep') text = R.endedBy === 'rest' ? 'It ended its day.' : R.endedBy === 'caretaker' ? 'You ended the day early.' : 'The sun set. It fell asleep.';
     else if (s.kind === 'waking') text = 'Waking up…';
     else if (s.kind === 'voice') text = 'You: ' + s.text;
+    else if (s.tool === 'nature') text = natureLine(i);
     else if (s.tool === 'looks' && s.kind !== 'guest') text = 'It looks different now: it drew itself.';
     else if (s.kind === 'guest') text = !s.ok ? `Tide: ${s.text}` : {
       arrive: 'Tide wakes up.', leave: 'Tide falls asleep.', say: `Tide: "${s.said || ''}"`, look: 'Tide looks around.',
       walk: s.body ? `Tide walks to (${s.body.x}, ${s.body.y}).` : `Tide: ${s.text}`,
-      listen: 'Tide listens' + (s.heard && s.heard.length ? ' and hears: ' + s.heard.map(h => h.text).join(' / ') : '.'),
+      listen: 'Tide listens' + (heardWho(s) ? ' and hears ' + heardWho(s) + '.' : '.'),
       paint: 'color' in s ? `Tide paints ${(s.tiles || []).length} steps ${s.color || 'back to how they were'}${s.edges ? `, with ${s.edges} edges` : ''}.` : `Tide makes the edges of ${(s.tiles || []).length} steps ${s.edges}.`,
       shape: 'level' in s ? `Tide shapes ${(s.tiles || []).length} steps to height ${s.level}${s.edges ? `, with ${s.edges} edges` : ''}.` : `Tide makes the edges of ${(s.tiles || []).length} steps ${s.edges}.`,
       place: `Tide places "${s.thing ? s.thing.name : ''}".`, remove: 'Tide takes something away.', looks: 'Tide drew herself.',
@@ -786,6 +945,7 @@ function buildLog() {
     else if (s.tool === 'build' && s.ok) text = buildLine(s, 'The islander');
     else if (s.tool === 'rules' && s.ok) text = rulesLine(s, 'The islander');
     else if (s.tool === 'say' && s.ok) text = `Islander: "${s.said || ''}"`;
+    else if (s.tool === 'listen' && s.ok) text = 'The islander listens' + (heardWho(s) ? ' and hears ' + heardWho(s) + '.' : '.');
     else if (s.tool === 'watch' && s.ok) text = 'The islander is ' + watching(s) + '.';
     else if (s.tool === 'sleep') text = 'The islander ends its day and falls asleep. The visitor is still here.';
     else text = s.text || s.tool;
@@ -869,7 +1029,32 @@ try { voiceOn = canSpeak && localStorage.getItem('island.voice') === '1'; } catc
 // English voices only (the owner's choice).
 const englishVoices = () => speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
 if (canSpeak) { voices = englishVoices(); speechSynthesis.onvoiceschanged = () => { voices = englishVoices(); }; }
-const speaking = () => canSpeak && (speechSynthesis.speaking || speechSynthesis.pending);
+// Their recorded voices (runner/voices.mjs, Kokoro): logs/voice/day-NNN/<key>.ogg. Played when there is one; on a
+// live day a line may still be being spoken, so it waits a few seconds for it before using the browser's voice.
+let voiceAudio = null, voiceWait = null;
+function voiceKey(who, text) {  // the same as voiceKey in runner/voices.mjs
+  let h = 0x811c9dc5;
+  for (const ch of who + '\n' + text) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
+function stopVoice() {
+  if (canSpeak) speechSynthesis.cancel();
+  if (voiceAudio) { voiceAudio.onerror = null; voiceAudio.pause(); voiceAudio = null; }
+  clearTimeout(voiceWait); voiceWait = null;
+}
+function playRecording(who, text, tries) {
+  const a = new Audio(`../logs/voice/day-${String(R.day).padStart(3, '0')}/${voiceKey(who, text)}.ogg`);
+  voiceAudio = a;
+  const failed = () => {
+    if (voiceAudio !== a) return;  // something else is speaking now
+    voiceAudio = null;
+    if (R.endedBy === 'live' && tries < 10) voiceWait = setTimeout(() => { voiceWait = null; playRecording(who, text, tries + 1); }, 1000);
+    else speakBrowser(text, who);
+  };
+  a.onerror = failed;
+  a.play().catch(err => { if (err && err.name === 'NotAllowedError') { voiceAudio = null; speakBrowser(text, who); } });
+}
+const speaking = () => Boolean(voiceWait) || Boolean(voiceAudio && !voiceAudio.ended) || (canSpeak && (speechSynthesis.speaking || speechSynthesis.pending));
 
 function showVoiceButton() {
   $('voice').textContent = voiceOn ? '🔊 Voice on' : '🔈 Voice off';
@@ -879,7 +1064,7 @@ function showVoiceButton() {
 $('voice').onclick = () => {
   voiceOn = !voiceOn;
   try { localStorage.setItem('island.voice', voiceOn ? '1' : '0'); } catch { /* fine */ }
-  if (!voiceOn) speechSynthesis.cancel(); else lastSpoken = currentIndex() - 1;
+  if (!voiceOn) stopVoice(); else lastSpoken = currentIndex() - 1;
   showVoiceButton();
 };
 showVoiceButton();
@@ -909,16 +1094,26 @@ function pickVoice(name, avoid) { return chooseVoice(name, MEN, avoid); }
 function pickVisitorVoice(name, avoid) { return chooseVoice(name, WOMEN, avoid); }
 
 function spokenLine(s) {
-  if (s.kind === 'say') return { who: 'islander', text: s.text };
+  if (s.kind === 'say') return { who: s.who ? 'visitor' : 'islander', text: s.text };  // Tide's own replies carry who
   if (s.kind === 'world' && s.tool === 'say' && s.ok) return { who: 'islander', text: s.said };
   if (s.kind === 'guest' && s.tool === 'say' && s.ok) return { who: 'visitor', text: s.said };
   return null;
 }
 
-function speak(text, who) {
+function cleanWords(text) {
   const clean = String(text || '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|]/g, '').replace(/^\s*[-•]\s+/gm, '').trim();
   // Only English is spoken: a line written in Greek letters stays silent.
-  if (!clean || /[Ͱ-Ͽἀ-῿]/.test(clean)) return;
+  return !clean || /[Ͱ-Ͽἀ-῿]/.test(clean) ? '' : clean;
+}
+// Their recorded voice if there is one, else the browser's.
+function speak(text, who) {
+  if (!cleanWords(text)) return;
+  stopVoice();
+  playRecording(who, text, 0);
+}
+function speakBrowser(text, who) {
+  const clean = cleanWords(text);
+  if (!clean || !canSpeak) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(clean);
   const set = (R && R.voice) || {}, mine = pickVoice(set.voice);
@@ -942,8 +1137,7 @@ function voiceStep() {
 
 // Jumping around stops the voice. A click on a line of the log speaks that line.
 function voiceSeek(speakHere) {
-  if (!canSpeak) return;
-  speechSynthesis.cancel();
+  stopVoice();
   holdIdx = -1;
   lastSpoken = speakHere ? -1 : currentIndex();
 }

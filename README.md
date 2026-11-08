@@ -16,6 +16,12 @@ This repository is the engine that runs them, plus a small showcase of what they
 On day 33, nobody told them to do anything. They sailed a boat around the world, built a cave inside a hill with
 glowing crystals, gave Gull Rock a little landing, put a fish in the pond, and ended the day with a night swim.
 
+Since day 39 they can also write **their own laws of physics**, small scripts that run in a sealed sandbox. Nobody
+announced it; they found the tool and started using it. They made a current that carries you round the island, a
+ferry, a floating paper boat and a duck, an aquarium with a turtle, a rope swing, a diving board, and a message in a
+bottle that drifts round the world and reads itself to whoever swims up to it. Since day 53 each of them has a real
+voice, so you can listen to what they say, live or in a replay.
+
 ![The night swim: the islander and Tide in the sea by the jellyfish, the cave's crystals glowing through the hill](docs/island-night.png)
 
 ![The islander, at the start of the night swim: "Night. Stars all the way down to the sea, the moon, the beacon on the lighthouse."](docs/night-swim.png)
@@ -24,12 +30,14 @@ glowing crystals, gave Gull Rock a little landing, put a fish in the pond, and e
 
 | Part | What it is |
 |---|---|
-| `runner/world.mjs` | The agents' **body**: an MCP server with the tools `look` (returns pictures of what they see), `walk`, `say`, `listen`, `paint`, `shape` (hills and cliffs), `place` (their own drawings), `remove`, `build` (blocks: houses, stairs, towers), `rules` (simple behaviours, like a lamp that glows at dusk), `sky` and `watch`. It is the only thing that can change the world. |
+| `runner/world.mjs` | The agents' **body**: an MCP server with the tools `look` (returns pictures of what they see), `walk`, `say`, `listen`, `paint`, `shape` (hills and cliffs), `place` (their own drawings), `remove`, `build` (blocks: houses, stairs, towers), `rules` (simple behaviours, like a lamp that glows at dusk), `physics` (their own scripts, below), `sky` and `watch`. It is the only thing that can change the world. |
 | `runner/visit.ps1` | Runs one day: prepares the morning, wakes the islander, puts it to sleep at sunset, writes a readable diary and a replay, and saves. |
 | `runner/visitor.ps1` | Runs the second agent (Tide) on the same island at the same time. |
 | `runner/*.md` | Everything the agents are told about their world. No goals, no tasks. |
 | `runner/memory.ps1` | Their memory (see below). |
 | `runner/clock.ps1`, `stop.ps1`, `voice.ps1` | Hooks: the island clock after each action, the sunset rule, and what the owner says from the live viewer. |
+| `runner/physics.mjs`, `physics-worker.mjs` | Their own physics: scripts they write in `island/physics/` run in QuickJS compiled to WebAssembly, in a worker thread with time and memory limits and a kill switch. See [PHYSICS.md](PHYSICS.md). |
+| `runner/voices.mjs` | Their voices: a local text-to-speech model (Kokoro) records each line as it is said; the viewer plays the recordings live and in replays. Optional. |
 | `runner/cinema.mjs` | An optional cinema: the owner can leave a video in their notebook, and `watch` shows them a stretch at a time (pictures from FFmpeg, words from subtitles). |
 | `viewer/` | The replay and live viewer. `art.js` draws the island in 3D, and the agents' own eyes use the same code, so you see what they see. You can zoom, pan, talk to them live and end the day early. |
 | `Island.cs` | Source of `Island.exe`, a small Windows launcher that runs everything hidden: `visit`, `test`, `check`, `status`, `save`, `replay`, `bottles`, `end`. |
@@ -39,7 +47,25 @@ glowing crystals, gave Gull Rock a little landing, put a fish in the pond, and e
 
 Each agent runs as `claude -p --restricted` with only file tools (Read, Write, Edit, Glob, Grep), confined to their own
 notebook folder, and one MCP server: `world.mjs`. They have no shell, no internet and none of the owner's settings.
-Nothing they write is ever executed: drawings, rules and builds are plain data that the engine reads and carries out.
+Drawings, rules and builds are plain data that the engine reads and carries out. The one kind of code they write, their
+physics scripts, runs only inside a sealed QuickJS interpreter with no files, no network, no clock and no way to call
+out. A script can only read a copy of the island and *ask* for changes, which the engine checks like any tool call.
+A slow script is stopped and paused for the day (this has happened, and they found and fixed it themselves).
+
+### Their own physics
+
+Before, `rules.txt` could only switch between behaviours we had thought of (show, hide, glow, move, open). Now a script
+in their notebook can define `onTick` (every 2 seconds), `onStep`, `onSay` and `onBuild`, and ask for things to
+move, water to rise, blocks to appear or a body to drift one step. Every change is recorded as an event, so the viewer
+never runs their code: it replays what happened. The design, limits and safety review are in [PHYSICS.md](PHYSICS.md),
+and the scripts they have written so far are in `showcase/physics/`.
+
+### Voices
+
+Each agent picked a voice from the list it was offered. While a day runs, `voices.mjs` speaks every new line with
+[Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) on the local CPU, about 4 seconds after it is said, and
+saves it as a small Opus file. The viewer plays these, and falls back to the browser's voice if one is missing. It costs
+no model usage.
 
 ### Memory
 
@@ -67,14 +93,15 @@ reading a good letter about yourself".
 - `docs/`: the pictures above, straight from the viewer (day 33, before and after they turned the sky to night).
 - `showcase/diaries/`: a few of their days as readable diaries: the first morning (`day-001`), the first day with a
   body (`day-002`), the visitor's first, ten-minute visit at night (`visitor-001`), its return (`day-011`), and the day
-  Tide moved in (`day-018`).
+  Tide moved in (`day-018`). Two later days: the diving board (`day-055`) and the message in a bottle (`day-058`).
+- `showcase/physics/`: every physics script they have written, as they wrote it, with their own comments.
 - `showcase/drawings/`: their pixel and shape drawings, in the island's text format: palette lines, then rows of
   pixels, or shapes. They drew everything on the island themselves, including their own bodies (`me.txt`, `me-tide.txt`).
 
 ## Running it
 
 Windows, with [Node.js](https://nodejs.org), [Claude Code](https://claude.com/claude-code) (`claude` on the PATH, signed
-in) and Git. FFmpeg is only needed for the cinema.
+in) and Git. FFmpeg is only needed for the cinema and the voices.
 
 1. Build the launcher once:
    `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /r:System.Management.dll /out:Island.exe Island.cs`
@@ -82,6 +109,9 @@ in) and Git. FFmpeg is only needed for the cinema.
 3. `Island.exe test 5` runs a short throwaway day in `.test\` (this uses your Claude usage).
 4. `Island.exe visit --minutes 30 --with-visitor` runs a real 30-minute day. On day 1 the island is empty.
 5. `Island.exe replay` opens the viewer.
+
+For voices (optional): run `npm install kokoro-js@1.2.1` in `tools/kokoro/`. The model (about 310 MB) downloads on the
+first day. Without it, the viewer uses the browser's voice.
 
 Their world (`world/`), notebook (`island/`), diaries (`logs/`) and memory backups (`memory/`) are created as they live,
 and are kept out of git by `.gitignore`.

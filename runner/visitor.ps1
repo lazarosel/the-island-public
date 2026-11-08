@@ -199,7 +199,7 @@ try {
         if ($newMemory) { $mcpEnv.ISLAND_PAGE = 'me-tide.md' }  # reminded a few minutes before sunset that the page can be updated
         $mcp = @{ mcpServers = @{ island = @{ type = 'stdio'; command = $node; args = @($world, 'serve'); env = $mcpEnv } } }
         [IO.File]::WriteAllText($mcpPath, ($mcp | ConvertTo-Json -Depth 10), $utf8)
-        $allowed = 'mcp__island__look,mcp__island__walk,mcp__island__say,mcp__island__listen' + $(if ($resident) { ',mcp__island__paint,mcp__island__place,mcp__island__remove,mcp__island__shape,mcp__island__watch,mcp__island__build,mcp__island__rules,mcp__island__sky' } else { '' })
+        $allowed = 'mcp__island__look,mcp__island__walk,mcp__island__say,mcp__island__listen' + $(if ($resident) { ',mcp__island__paint,mcp__island__place,mcp__island__remove,mcp__island__shape,mcp__island__watch,mcp__island__build,mcp__island__rules,mcp__island__sky,mcp__island__physics' } else { '' })
         $argList += @('--mcp-config', "`"$mcpPath`"", '--allowedTools', $allowed)
         $env:ISLAND_INBOX  = Join-Path $root 'world\inbox-visitor.jsonl'
         $env:ISLAND_EVENTS = Join-Path $root ('world\events\day-{0:D3}.jsonl' -f $Day)

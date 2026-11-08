@@ -193,7 +193,7 @@ try {
         '-p', '--restricted', '--strict-mcp-config', '--disable-slash-commands',
         '--mcp-config', "`"$mcpPath`"",
         '--tools', 'Read,Write,Edit,Glob,Grep',
-        '--allowedTools', ('mcp__island__look,mcp__island__walk,mcp__island__paint,mcp__island__place,mcp__island__remove,mcp__island__shape,mcp__island__listen,mcp__island__watch,mcp__island__build,mcp__island__rules,mcp__island__sky' + $(if ($guest) { ',mcp__island__say' } else { '' })),
+        '--allowedTools', ('mcp__island__look,mcp__island__walk,mcp__island__paint,mcp__island__place,mcp__island__remove,mcp__island__shape,mcp__island__listen,mcp__island__watch,mcp__island__build,mcp__island__rules,mcp__island__sky,mcp__island__physics' + $(if ($guest) { ',mcp__island__say' } else { '' })),
         '--permission-mode', 'acceptEdits',
         '--system-prompt-file', "`"$(Join-Path $PSScriptRoot 'system-prompt.md')`"",
         '--settings', "`"$settingsPath`"",
@@ -213,6 +213,15 @@ try {
         -RedirectStandardInput $promptPath -RedirectStandardOutput $rawPath -RedirectStandardError $errPath `
         -NoNewWindow -PassThru
     $null = $p.Handle
+    # Their voices (runner\voices.mjs, with Kokoro in tools\kokoro if it is there): each line spoken as it is said.
+    $voiceFlag = Join-Path $root 'world\voices-finish.flag'
+    Remove-Item $voiceFlag -ErrorAction SilentlyContinue
+    $voicesProc = $null
+    if (Test-Path (Join-Path $root 'tools\kokoro\node_modules\kokoro-js')) {
+        $voicesProc = Start-Process -FilePath $node -ArgumentList @("`"$(Join-Path $PSScriptRoot 'voices.mjs')`"", 'live', "$day") `
+            -WorkingDirectory $root -NoNewWindow -PassThru -RedirectStandardError (Join-Path $rawLogs "$tag.voices.txt")
+        $null = $voicesProc.Handle
+    }
     $visitorProc = $null
     if ($guest) {
         $vArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $PSScriptRoot 'visitor.ps1')`"", '-Together', '-Day', "$day", '-Until', "`"$($sunset.ToString('o'))`"")
@@ -284,7 +293,7 @@ try {
                             'mcp__island__place'  { "placed ``$($i.drawing)``" }
                             'mcp__island__remove' { 'took something away' }
                             'mcp__island__shape'  { if ($i.level) { "shaped the land to height $($i.level)" } else { "made the edges $($i.edges)" } }
-                            'mcp__island__say'    { "said: `"$($i.text)`"" }
+                            'mcp__island__say'    { 'spoke' }  # the words are in the conversation at the end, once
                             'mcp__island__listen' { 'listened' }
                             'mcp__island__watch'  { if ($i.film) { "watched ``$($i.film)``" } else { 'looked at the films in the cinema' } }
                             'mcp__island__build'  { if ($i.mode -eq 'clear') { "cleared blocks from ($($i.from -join ', ')) to ($($i.to -join ', '))" } else { "built $(if ($i.mode) { $i.mode } else { 'fill' }) of $($i.color) from ($($i.from -join ', ')) to ($($i.to -join ', '))" } }
@@ -326,6 +335,15 @@ try {
     & $node $world replay $day $rawPath $now.ToString('o') $visitEnd.ToString('o') $endedBy $promptPath
     if ($LASTEXITCODE -ne 0) { Log "replay failed ($LASTEXITCODE)" }
     Remove-Item (Join-Path $logs 'replay\live.js'), $env:ISLAND_INBOX -ErrorAction SilentlyContinue
+
+    # The voices finish the last lines (a few minutes at most), then stop.
+    if ($voicesProc) {
+        Set-Content -Path $voiceFlag -Value 'finish'
+        if (-not $voicesProc.WaitForExit(240000)) { & taskkill.exe /T /F /PID $voicesProc.Id | Out-Null }
+        Remove-Item $voiceFlag -ErrorAction SilentlyContinue
+        $voiceErr = Join-Path $rawLogs "$tag.voices.txt"
+        if ((Test-Path $voiceErr) -and (Get-Item $voiceErr).Length -eq 0) { Remove-Item $voiceErr }
+    }
 
     # --- Remember where we are ------------------------------------------------
     $state.day = $day

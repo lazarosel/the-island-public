@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { makeCinema } from './cinema.mjs';
+import { makePhysics, MAX_SCRIPTS, MAX_SCRIPT_BYTES } from './physics.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const art = createRequire(import.meta.url)(path.join(here, '..', 'viewer', 'art.js'));
@@ -281,7 +282,8 @@ const ENGINE_NEWS = 'Something is new this morning: you can build with blocks no
 
 // --- Blocks and rules ----------------------------------------------------------------
 const BUILD_REACH = 12, MAX_BUILD = 4000, MAX_BLOCKS = 50000;
-const BUILD_MODES = ['fill', 'walls', 'hollow', 'clear'];
+const BUILD_MODES = ['fill', 'walls', 'hollow', 'water', 'clear'];
+const MAX_WATER = 6000;
 const hex2 = n => n.toString(16).padStart(2, '0');
 const DAY_EVENTS = () => path.join(worldDir, 'events', `day-${pad3(Number(process.env.ISLAND_DAY || 0))}.jsonl`);
 
@@ -357,6 +359,50 @@ function setEdges(state, tiles, edges) {
 
 const RULES_HELP = 'Each line of rules.txt is  when <condition>: <what happens>  (see the rules tool for everything it can say).';
 
+// --- Their own physics (island/physics/*.js), run sealed by physics.mjs ----------------------------------------------
+// A hook runs inside a tool (onStep, onSay, onBuild) or on the islander's 2-second tick (onTick). What it changes is
+// applied to the same state the tool is changing, marked dirty so it is saved, and recorded afterwards as a "nature"
+// event (with the hook and every change), which is what replays play.
+let physics = null, natureDirty = false;
+const pendingNature = [];
+const phys = () => physics || (physics = makePhysics({ islandDir, worldDir, art, maxBlocks: MAX_BLOCKS, setBody }));
+// The islander's server is the one place their scripts keep running (the ferry, the current, ...). What Tide says or
+// builds is handed to it through world/physics-queue.jsonl and runs at its next tick (within 2 seconds), so it reaches
+// the same running scripts. onStep has to answer at once, so it runs where the step is taken.
+const NATURE_QUEUE = path.join(worldDir, 'physics-queue.jsonl');
+function runNature(hook, state, extra = []) {
+    if (WHO !== 'islander' && (hook === 'onSay' || hook === 'onBuild')) {
+        // Only when there are scripts at all; the islander's server checks which have this hook.
+        try { if (fs.readdirSync(path.join(islandDir, 'physics')).some(n => n.endsWith('.js'))) fs.appendFileSync(NATURE_QUEUE, JSON.stringify({ hook, extra }) + '\n'); } catch { /* no physics folder */ }
+        return null;
+    }
+    let p;
+    try { p = phys(); if (!p.hasHook(hook)) return null; } catch { return null; }
+    const now = Date.now();
+    const res = p.run(hook, state, bodiesOf(state), { t: now, f: dayFraction(now), seed: Math.floor(now / 2000) }, extra);
+    if (res.applied.length) { natureDirty = true; pendingNature.push({ hook, changes: res.applied }); }
+    // Being carried is told once, when it starts (and again after a minute of not being carried), not at every step:
+    // anything told wakes a listen, and a current carrying someone every two seconds would wake them every two seconds.
+    for (const t of res.told) {
+        if (now - (lastCarried[t.who] || 0) > 60000) tell(t.who, t.text.replace(/ \(([^)]+)\)\.$/, ', and keeps carrying you while it holds ($1).'));
+        lastCarried[t.who] = now;
+    }
+    return res;
+}
+const lastCarried = {};
+const flushNature = record => { while (pendingNature.length) record({ tool: 'nature', ok: true, ...pendingNature.shift() }); };
+
+const PHYSICS_HELP = 'Your own physics: JavaScript files in the folder physics/ in the notebook (physics/tide.js, physics/current.js ...), shared by you both. ' +
+    `The island runs them itself, sealed off: they can only read the island and ask for changes, which the island checks like your tools. Up to ${MAX_SCRIPTS} files, ${MAX_SCRIPT_BYTES / 1024} KB each. ` +
+    'A file defines any of these functions, and the island calls them: onTick(world) every 2 seconds; onStep(world, who, from, to) before each step anyone walks (from and to are {x, y, z}); ' +
+    'onSay(world, who, text) when someone speaks; onBuild(world, who, op) after a build. who is "islander" or "visitor" (Tide). ' +
+    'world has: time (ms), dayFraction (0 at waking to 1 at sunset), night, map {w, h}, things [{id, name, x, y, z}], bodies [{who, x, y, z}], and world.blockAt(x, y, z), world.waterAt(x, y, z), world.heightAt(x, y), world.isLand(x, y), world.thingsNamed(name), world.body(who). ' +
+    'To change things, call: move(thing, x, y[, z]) (a placed thing, at most 4 steps at a time; it glides there), setBlock(x, y, z, "#rrggbb") and clearBlock(x, y, z), ' +
+    'setWater(x, y, z[, "#rrggbbaa"]) and clearWater(x, y, z) (water you can walk into; two deep or more, you float with your head out), drift(who, "e") (carries someone one step that way, if they could step there; they are told), ' +
+    'stop("why") (in onStep: they don\'t take that step, and hear why), log(...) (notes you can read with this tool), random() (the same each time for the same moment). ' +
+    'Variables at the top of a file keep their values between calls, until that file changes (other files changing doesn\'t touch it). All of it runs in one place, so a word either of you says reaches the same running scripts (within 2 seconds). Each call has about 30 ms; a script that runs too long, or fails five times in a row, is paused until its file changes. ' +
+    'Example (physics/drift.js):  function onTick(world) { var b = world.body("islander"); if (b && world.waterAt(b.x, b.y, b.z)) drift("islander", "e"); }';
+
 const TOOLS = [
     {
         name: 'sky',
@@ -420,7 +466,7 @@ const TOOLS = [
             }
             const ground = state.paint[x + ',' + y];
             const by = WHO === 'islander' && !GUEST ? 'you' : 'someone';
-            const onLand = art.isLand(state.map, x, y), onBlocks = level > groundLevel;
+            const onLand = art.isLand(state.map, x, y), onBlocks = level > groundLevel && !art.waterAt(state, x, y, level);
             const far = ['n', 'e', 's', 'w'].map(d => { const n = distanceToChange(state, x, y, ...DIRS[d]); return n === null ? `none to the ${DIR_NAMES[d]}` : `${n} step${n > 1 ? 's' : ''} ${DIR_NAMES[d]}`; });
             const edge = ['n', 'e', 's', 'w'].map(d => { let i = 0; while (inWorld(state.map, x + DIRS[d][0] * (i + 1), y + DIRS[d][1] * (i + 1))) i++; return [d, i]; }).filter(([, i]) => i < 8);
             const lines = [
@@ -430,7 +476,11 @@ const TOOLS = [
                 onLand ? `The sea is ${far.join(', ')}.` : `Land is ${far.join(', ')}.`,
             ];
             if (onLand && !onBlocks) lines.push(`The ground here is at height ${groundLevel} (1 is the lowest land, ${art.MAX_HEIGHT} the highest).`);
+            const wetInView = Object.keys(state.water || {}).filter(k => { const [wx, wy] = k.split(',').map(Number); return wx >= x0 && wx < x0 + VIEW_W && wy >= y0 && wy < y0 + VIEW_H; }).length;
+            if (wetInView) lines.push(`Water in view (water you can walk into): ${wetInView} place${wetInView === 1 ? '' : 's'}.`);
             if (cut != null) lines.push(`There are blocks above your head (from level ${roof}), so the pictures leave out everything from level ${cut} up, to show you the room around you.`);
+            if (art.waterAt(state, x, y, level)) lines.push(art.waterAt(state, x, y, level - 1) || (level === 0 && !onLand)
+                ? 'You are swimming: deep water around you, your head above the surface.' : 'You are wading, in water up to your waist.');
             if (edge.length) lines.push('The edge of the world (dark water you cannot pass) is ' + edge.map(([d, i]) => `${i + 1} step${i ? 's' : ''} ${DIR_NAMES[d]}`).join(', ') + '.');
             const inView = (tx, ty) => tx >= x0 && tx < x0 + VIEW_W && ty >= y0 && ty < y0 + VIEW_H;
             const seen = scene.world.things.filter(t => inView(t.x, t.y));
@@ -493,6 +543,9 @@ const TOOLS = [
                     wall = up != null && up > level + 1 ? ` It is too high to climb: its top is at level ${up}, and you can step up one level at a time.` : ' There is no room to stand there (you need two free levels).';
                     break;
                 }
+                // Their physics may stop a step (onStep).
+                const said = runNature('onStep', state, [WHO, { x, y, z: level }, { x: x + dx, y: y + dy, z: next }]);
+                if (said && said.stops.length) { wall = ' ' + said.stops[0]; break; }
                 x += dx; y += dy; level = next; pathTaken.push([x, y, level]);
             }
             const ground = art.heightAt(state, x, y);
@@ -636,7 +689,9 @@ const TOOLS = [
             '(a level is as tall as one step of the land\'s height) and has one color: #rrggbb, or #rrggbbaa to see through it a little, like glass (aa is how solid, 00 to ff). ' +
             `A place for a block is x, y and a level: the sea is level 0, and on land of height h (look tells you the height where you stand) level h is the first level on top of the ground. Levels go up to ${art.MAX_LEVEL - 1}. ` +
             'from and to are two opposite corners of a box, like [30, 12, 1] and [34, 16, 3]. ' +
-            'mode: "fill" (a solid box, the default), "walls" (only the four sides, on every level: a room with no floor or roof), "hollow" (the sides, the floor and the roof) or "clear" (takes away the blocks in the box; a doorway is a clear through a wall). ' +
+            'mode: "fill" (a solid box, the default), "walls" (only the four sides, on every level: a room with no floor or roof), "hollow" (the sides, the floor and the roof), ' +
+            '"water" (fills the box with water where there are no blocks: you can walk into it, and where it is two deep or more you float with your head out; color is optional, see-through blue if left out) ' +
+            'or "clear" (takes away the blocks and water in the box; a doorway is a clear through a wall). ' +
             `The whole box must be within ${BUILD_REACH} steps of you, and one build covers at most ${MAX_BUILD} blocks. You can't build where someone is standing, and nothing is built under the ground. ` +
             'Blocks are solid: you walk on top of them, step up one level at a time (stairs) and down any height, and need two free levels to stand in, so a doorway is two levels tall. Whoever stands on blocks you clear falls to what is below. ' +
             'Things you place on blocks stand on top of them. Look to see what you built.',
@@ -658,9 +713,10 @@ const TOOLS = [
             };
             const from = corner(args.from, 'from'), to = corner(args.to, 'to');
             const mode = String(args.mode || 'fill').trim().toLowerCase();
-            if (!BUILD_MODES.includes(mode)) throw new Error(`mode is "fill", "walls", "hollow" or "clear", not "${args.mode}".`);
+            if (!BUILD_MODES.includes(mode)) throw new Error(`mode is "fill", "walls", "hollow", "water" or "clear", not "${args.mode}".`);
             let color = null;
-            if (mode !== 'clear') {
+            if (mode === 'water' && (args.color == null || args.color === '')) color = art.WATER;
+            else if (mode !== 'clear') {
                 const c = args.color == null ? null : art.parseColor(args.color);
                 if (!c) throw new Error(args.color == null ? 'Which color? color is #rgb, #rrggbb or #rrggbbaa (aa makes it see-through, like glass).' : `"${args.color}" is not a color. Use #rgb, #rrggbb or #rrggbbaa.`);
                 if (c[3] === 0) throw new Error('A block with alpha 00 is fully see-through and can\'t be seen at all. Use a higher alpha (like 80) or none.');
@@ -675,26 +731,28 @@ const TOOLS = [
             const cellSet = new Set();
             art.eachBuildCell(op, (x, y, z) => { cells++; if (mode !== 'clear' && cells <= MAX_BUILD) cellSet.add(x + ',' + y + ',' + z); });
             if (cells > MAX_BUILD) throw new Error(`That box has ${cells} blocks; one build can do at most ${MAX_BUILD}. Build it in parts.`);
-            if (mode !== 'clear') for (const [who, b] of bodiesOf(state)) {
+            if (mode !== 'clear' && mode !== 'water') for (const [who, b] of bodiesOf(state)) {
                 const L = art.levelOf(state, b);
                 for (let k = 0; k < art.BODY_LEVELS; k++) if (cellSet.has(b.x + ',' + b.y + ',' + (L + k))) {
                     throw new Error(`${who === WHO ? 'You are' : `${NAMES[who] || who} is`} standing there, at (${b.x}, ${b.y}) on ${levelWords(state, b.x, b.y, L)}. Nothing was built.`);
                 }
             }
-            const before = state.blocks ? { ...state.blocks } : {};
+            const before = state.blocks ? { ...state.blocks } : {}, waterBefore = state.water ? { ...state.water } : null;
             const { changed, skipped } = art.applyBuild(state, op);
-            const total = Object.keys(state.blocks).length;
-            if (total > MAX_BLOCKS) { state.blocks = before; throw new Error(`The world can hold ${MAX_BLOCKS} blocks, and this would make ${total}. Clear some first. Nothing was built.`); }
-            // Whoever and whatever stood on blocks that are gone now falls to what is below.
+            const total = Object.keys(state.blocks).length, wet = Object.keys(state.water || {}).length;
+            if (total > MAX_BLOCKS) { state.blocks = before; state.water = waterBefore || undefined; throw new Error(`The world can hold ${MAX_BLOCKS} blocks, and this would make ${total}. Clear some first. Nothing was built.`); }
+            if (wet > MAX_WATER) { state.blocks = before; state.water = waterBefore || undefined; throw new Error(`The world can hold ${MAX_WATER} cells of water, and this would make ${wet}. Clear some first. Nothing was built.`); }
+            // Whoever and whatever stood on blocks that are gone now falls to what is below (or floats, in deep water).
             const fell = [], thingsFell = [], notes = [];
-            if (mode === 'clear') {
+            if (mode === 'clear' || mode === 'water') {
                 for (const [who, b] of bodiesOf(state)) {
                     const L = art.levelOf(state, b), down = art.fallTo(state, b.x, b.y, L);
                     if (down === L) continue;
                     const nb = placedAt(state, b, down);
                     setBody(state, who, nb);
                     fell.push({ who, z: nb.z ?? null });
-                    notes.push(`${youOr(who)} ${who === WHO ? 'fall' : 'falls'} to ${levelWords(state, b.x, b.y, down)}.`);
+                    notes.push(down > L ? `${youOr(who)} ${who === WHO ? 'float' : 'floats'} up to level ${down}, head above the water.`
+                        : `${youOr(who)} ${who === WHO ? 'fall' : 'falls'} to ${levelWords(state, b.x, b.y, down)}.`);
                 }
                 for (const t of state.things) {
                     if (t.z == null) continue;
@@ -708,10 +766,12 @@ const TOOLS = [
             const where = `from (${from.join(', ')}) to (${to.join(', ')})`, plural = n => `${n} block${n === 1 ? '' : 's'}`;
             let text = mode === 'clear'
                 ? (changed ? `You clear ${plural(changed)} ${where}.` : `There were no blocks ${where} to clear.`)
+                : mode === 'water' ? (changed ? `You fill ${changed} place${changed === 1 ? '' : 's'} with water ${where}.` : `Nothing changed: there was already water ${where}, or blocks.`)
                 : skipped === cells ? `Nothing was built: the whole box ${where} is under the ground or beyond the edge of the world.`
                 : (changed ? `You build ${plural(changed)} of ${color} (${mode}) ${where}.` : `Nothing changed: the blocks ${where} were already ${color}.`);
             if (skipped && skipped < cells && mode !== 'clear') text += ` ${skipped} of the box's places ${skipped === 1 ? 'was' : 'were'} under the ground or beyond the edge of the world, so nothing was built there.`;
             if (notes.length) text += ' ' + notes.slice(0, 6).join(' ') + (notes.length > 6 ? ` And ${notes.length - 6} more things fall.` : '');
+            if (changed) runNature('onBuild', state, [WHO, op]);
             return { changed: changed > 0, event: { op, count: changed, ...(fell.length ? { fell } : {}), ...(thingsFell.length ? { thingsFell } : {}) }, content: [{ type: 'text', text }] };
         },
     },
@@ -755,6 +815,28 @@ const TOOLS = [
         },
     },
     {
+        name: 'physics',
+        description: 'Check your physics scripts and see what they have been doing. ' + PHYSICS_HELP +
+            ' This tool takes nothing: it loads the files and tells you which work, which functions each has, which are paused and why, and the latest log lines and refused changes.',
+        inputSchema: { type: 'object', properties: {} },
+        run() {
+            const st = phys().status();
+            const lines = [];
+            if (!st.scripts.length && !st.problems.length) return { event: { scripts: 0 }, content: [{ type: 'text', text: 'There are no physics scripts yet (the folder physics/ in your notebook is empty or missing). ' + PHYSICS_HELP }] };
+            for (const s of st.scripts) {
+                if (!s.ok) lines.push(`${s.name}: doesn't load. ${s.error}`);
+                else if (s.paused) lines.push(`${s.name}: paused (it starts again when you change the file). Why: ${s.paused}`);
+                else lines.push(`${s.name}: works${s.hooks.length ? `, with ${s.hooks.join(', ')}` : ', but has none of onTick, onStep, onSay, onBuild, so nothing calls it'}.`);
+            }
+            for (const p of st.problems) lines.push(`${p.name}: left out. ${p.error}`);
+            const recent = st.recent.map(r => r.log ? `${r.script} (${r.hook}) logged: ${r.log.join(' / ')}`
+                : r.refused ? `${r.script} (${r.hook}) asked for changes the island refused: ${r.refused.join('; ')}`
+                : r.paused ? `${r.script} was paused: ${r.paused}` : r.error ? `${r.script} failed: ${r.error}` : '').filter(Boolean);
+            if (recent.length) lines.push('Lately:', ...recent.slice(-10).map(l => '  ' + l.slice(0, 400)));
+            return { event: { scripts: st.scripts.length }, content: [{ type: 'text', text: lines.join('\n') }] };
+        },
+    },
+    {
         name: 'say',
         description: 'Say something out loud. Whoever else is on the island hears it at their next action, or right away if they are listening.',
         inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
@@ -763,6 +845,7 @@ const TOOLS = [
             if (!text) throw new Error('Say what?');
             const others = hearers(state);
             for (const o of others) fs.appendFileSync(inboxOf(o), JSON.stringify({ t: new Date().toISOString(), from: WHO, text }) + '\n');
+            runNature('onSay', state, [WHO, text]);
             const nobody = WHO !== 'islander' && state.asleep ? 'You say it out loud. The islander is asleep and doesn\'t hear it.' : 'You say it out loud. Nobody else is on the island to hear it.';
             return { event: { said: text }, content: [{ type: 'text', text: !others.length ? nobody
                 : onTheWay(state) ? `You say: "${text}" ${NAMES[GUEST] || GUEST} hasn't arrived yet; it will hear this when it does.` : `You say: "${text}"` }] };
@@ -823,6 +906,33 @@ function serve() {
         if (wait > 0) setTimeout(() => tell(WHO, `About five minutes of daylight left. If anything today changed who you are or what you're in the middle of, now is a good moment to update your page, ${page}. Only if you want to.`), wait).unref();
     }
 
+    // Their physics' tick (onTick): every 2 seconds, in the islander's server only, so one place decides. It goes on
+    // while the islander sleeps and a visitor is still here, and stops when the islander's server does.
+    if (WHO === 'islander') fs.rmSync(NATURE_QUEUE, { force: true });  // nothing left over from another day
+    if (WHO === 'islander') setInterval(() => {
+        try {
+            const queued = fs.existsSync(NATURE_QUEUE);
+            if (!queued && !phys().hasHook('onTick')) return;
+            withLock(() => {
+                const st = loadState();
+                if (!st || !st.body) return;
+                natureDirty = false; pendingNature.length = 0;
+                // First what Tide said or built since the last tick (handed over by her server), then the tick.
+                if (queued) {
+                    const taking = NATURE_QUEUE + '.taking';
+                    try { fs.renameSync(NATURE_QUEUE, taking); } catch { /* none after all */ }
+                    let lines = [];
+                    try { lines = fs.readFileSync(taking, 'utf8').split('\n').filter(Boolean).slice(0, 50); } catch { /* gone */ }
+                    fs.rmSync(taking, { force: true });
+                    for (const l of lines) { try { const q = JSON.parse(l); if ((q.hook === 'onSay' || q.hook === 'onBuild') && Array.isArray(q.extra)) runNature(q.hook, st, q.extra); } catch { /* half-written */ } }
+                }
+                runNature('onTick', st);
+                if (natureDirty) saveState(st);
+            });
+            flushNature(record);
+        } catch { pendingNature.length = 0; }
+    }, 2000);
+
     // A visitor's body appears on the island when its server starts, and goes when it stops.
     if (WHO !== 'islander') {
         const b = withLock(() => { const st = loadState(); const nb = st && arrive(st, WHO); if (nb) saveState(st); return nb; });
@@ -860,15 +970,18 @@ function serve() {
                     out = withLock(() => {
                         const state = loadState();
                         if (!state || !bodyOf(state, WHO)) throw new Error('The island is not ready yet.');
+                        natureDirty = false; pendingNature.length = 0;
                         const o = tool.run(state, args, record);
-                        if (o.changed) saveState(state);
+                        if (o.changed || natureDirty) saveState(state);
                         body = bodyOf(state, WHO);
                         return o;
                     });
                 }
                 record({ tool: tool.name, input: args, ok: true, body, ...out.event, text: out.content.find(c => c.type === 'text')?.text });
+                flushNature(record);
                 return send({ jsonrpc: '2.0', id, result: { content: out.content } });
             } catch (err) {
+                pendingNature.length = 0;  // the tool failed and its state wasn't saved, so neither were the changes
                 record({ tool: params?.name, input: params?.arguments || {}, ok: false, text: err.message });
                 return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: err.message }], isError: true } });
             }
@@ -1125,7 +1238,8 @@ function replay(day, rawPath, start, end, endedBy, promptFile) {
     // Changes of looks, the owner's voice and everything a visitor does aren't the islander's tool calls;
     // they slot in by time.
     // A change of the rules file is recorded with the new rules (the rules tool's own calls are not).
-    const isTimed = e => e.tool === 'looks' || e.tool === 'voice' || e.tool === 'sleep' || (e.tool === 'rules' && 'rules' in e) || (e.who && e.who !== 'islander');
+    // Their physics at work (nature) slots in by time too.
+    const isTimed = e => e.tool === 'looks' || e.tool === 'voice' || e.tool === 'sleep' || e.tool === 'nature' || (e.tool === 'rules' && 'rules' in e) || (e.who && e.who !== 'islander');
     const timed = events.filter(isTimed);
     const queue = events.filter(e => !isTimed(e));
     const islandPrefix = islandDir.replace(/\\/g, '/').replace(/\/?$/, '/').toLowerCase();
@@ -1192,7 +1306,7 @@ function replay(day, rawPath, start, end, endedBy, promptFile) {
         voice: readVoice(),
         visitorVoice: readVoice(path.join('letters', 'visitor-voice.txt')),
         map: (snap || newWorld()).map,
-        startState: snap ? { paint: snap.paint, height: snap.height || {}, smooth: snap.smooth || {}, things: snap.things, body: snap.body, looks: snap.looks, blocks: snap.blocks || {}, rules: snap.rules || null, sky: snap.sky || null } : null,
+        startState: snap ? { paint: snap.paint, height: snap.height || {}, smooth: snap.smooth || {}, things: snap.things, body: snap.body, looks: snap.looks, blocks: snap.blocks || {}, water: snap.water || {}, rules: snap.rules || null, sky: snap.sky || null } : null,
         steps,
     };
     const replayDir = path.join(root, 'logs', 'replay');

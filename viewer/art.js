@@ -703,6 +703,7 @@
     // (or opts.skip(thing) decides which to leave out); opts.cut leaves out blocks from that level up.
     function render(world, x0, y0, tw, th, opts) {
         opts = opts || {};
+        world = shownWorld(world);
         const width = tw * TILE, height = th * TILE;
         const img = { width, height, data: new Uint8ClampedArray(width * height * 4) };
         const d = img.data;
@@ -1095,6 +1096,7 @@
     // drawn in between, after the blocks under it and before the ones above it (a roof).
     function renderIso(world, x0, y0, tw, th, opts) {
         opts = opts || {};
+        world = shownWorld(world);
         const tiles = blocksByTile(world, x0, y0, tw, th);
         let top = 0;
         for (const key in tiles) top = Math.max(top, tiles[key][tiles[key].length - 1] + 1);
@@ -1219,17 +1221,49 @@
 
     function blockAt(world, x, y, z) { return world.blocks ? world.blocks[x + ',' + y + ',' + z] : undefined; }
 
+    // Water (world.water, "x,y,z" -> color): cells of water above the ground. They are drawn like see-through blocks,
+    // but they aren't solid: you walk into them, and in water two deep or more you float with your head out.
+    const WATER = '#3a8ee0a0';
+    function waterAt(world, x, y, z) { return world.water ? world.water[x + ',' + y + ',' + z] : undefined; }
+    // The world as it is drawn: its water shown among the blocks.
+    function shownWorld(world) {
+        if (!world.water) return world;
+        let any = false;
+        for (const k in world.water) { any = true; break; }
+        return any ? { ...world, blocks: { ...world.water, ...(world.blocks || {}) } } : world;
+    }
+    // Where someone standing at level s on (x, y) ends up in water: still at s in shallow water, floating up to the
+    // surface (head out) when it is deeper, as long as nothing solid is overhead.
+    function floatUp(world, x, y, s) {
+        if (!world.water) return s;
+        let z = s;
+        while (waterAt(world, x, y, z) && waterAt(world, x, y, z + 1) && !blockAt(world, x, y, z + 1 + BODY_LEVELS - 1)) z++;
+        return z;
+    }
+
     // A build: {from: [x, y, z], to: [x, y, z], mode, color}. mode "fill" (solid), "walls" (only the box's sides),
-    // "hollow" (sides, floor and roof) or "clear" (take blocks away). Cells under the ground or outside the world are
-    // skipped. Changes world.blocks; returns {changed, skipped}.
+    // "hollow" (sides, floor and roof), "water" (fills the box with water, where there are no blocks) or "clear"
+    // (takes blocks and water away). Cells under the ground or outside the world are skipped. Changes world.blocks
+    // and world.water; returns {changed, skipped}.
     function applyBuild(world, op) {
         world.blocks = world.blocks || {};
         let changed = 0, skipped = 0;
         eachBuildCell(op, (x, y, z) => {
             if (!inWorld(world.map, x, y) || z < heightAt(world, x, y) || z < 0 || z >= MAX_LEVEL) { skipped++; return; }
             const k = x + ',' + y + ',' + z;
-            if (op.mode === 'clear') { if (world.blocks[k]) { delete world.blocks[k]; changed++; } }
-            else if (world.blocks[k] !== op.color) { world.blocks[k] = op.color; changed++; }
+            if (op.mode === 'clear') {
+                let gone = false;
+                if (world.blocks[k]) { delete world.blocks[k]; gone = true; }
+                if (world.water && world.water[k]) { delete world.water[k]; gone = true; }
+                if (gone) changed++;
+            } else if (op.mode === 'water') {
+                if (world.blocks[k]) { skipped++; return; }
+                world.water = world.water || {};
+                if (world.water[k] !== op.color) { world.water[k] = op.color; changed++; }
+            } else if (world.blocks[k] !== op.color) {
+                world.blocks[k] = op.color; changed++;
+                if (world.water && world.water[k]) delete world.water[k];
+            }
         });
         return { changed, skipped };
     }
@@ -1255,17 +1289,17 @@
         const free = z => { for (let k = 0; k < BODY_LEVELS; k++) if (blockAt(world, x, y, z + k)) return false; return true; };
         const g = heightAt(world, x, y);
         if (world.blocks) for (let z = MAX_LEVEL - 1; z >= g; z--) {
-            if (blockAt(world, x, y, z) && free(z + 1) && (from == null || z + 1 <= from + 1)) return z + 1;
+            if (blockAt(world, x, y, z) && free(z + 1) && (from == null || z + 1 <= from + 1)) return floatUp(world, x, y, z + 1);
         }
-        return free(g) ? g : null;
+        return free(g) ? floatUp(world, x, y, g) : null;
     }
 
     // Where someone at level `from` on step (x, y) ends up if what held them went away: the highest block top or
-    // ground at or below that level.
+    // ground at or below that level (or the surface, in deep water).
     function fallTo(world, x, y, from) {
         const g = heightAt(world, x, y);
-        for (let z = Math.min(from, MAX_LEVEL) - 1; z >= g; z--) if (blockAt(world, x, y, z)) return z + 1;
-        return g;
+        for (let z = Math.min(from, MAX_LEVEL) - 1; z >= g; z--) if (blockAt(world, x, y, z)) return floatUp(world, x, y, z + 1);
+        return floatUp(world, x, y, g);
     }
 
     // Where a body or a thing stands, in levels (bodies and things on blocks carry z; otherwise the ground).
@@ -1626,7 +1660,7 @@
         parseColor, parseDrawing, parseShapes, rasterShapes, smoothFrame, coastLine, frameOf, drawDrawing, bodyOrigin, frontView, modelFoot, isoModelImage, isLand, inWorld, heightAt,
         isAnimated, motion, pathPoint, movingLevel, groundColor, render, renderIso, lookEffects, isoLayout, isoPoint, isoSprite, isoThing, hash,
         skyColors, INK,
-        MAX_LEVEL, BODY_LEVELS, blockAt, applyBuild, eachBuildCell, standAt, fallTo, levelOf, columnTop, blocksByTile, isoBlock, flatBlocks,
+        MAX_LEVEL, BODY_LEVELS, blockAt, WATER, waterAt, shownWorld, floatUp, applyBuild, eachBuildCell, standAt, fallTo, levelOf, columnTop, blocksByTile, isoBlock, flatBlocks,
         parseMoves, parseCondition, parseAction, parseRules, withRules, drawGlows, drawSky,
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
